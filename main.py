@@ -94,7 +94,7 @@ def get_entries_by_date(start_iso: str, end_iso: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def filter_by_client(df: pd.DataFrame, client_name: str) -> tuple[pd.DataFrame, str]:
+def filter_by_client(df: pd.DataFrame, client_name: str) -> tuple[pd.DataFrame, str]: # One client but mulitple projects
     """Filter entries by client name (case-insensitive)."""
     key = client_name.lower().strip()
 
@@ -117,10 +117,10 @@ def filter_by_client(df: pd.DataFrame, client_name: str) -> tuple[pd.DataFrame, 
         (df['client_name'].str.lower() == key) &
         (df['client_id']   == client_id)
     ].copy()
-    return df_client, client_id
+    return df_client, client_id 
 
 
-def filter_by_project(df: pd.DataFrame, project_name: str)-> pd.DataFrame:
+def filter_by_project(df: pd.DataFrame, project_name: str)-> pd.DataFrame: # Input: DF client
     """Filter entries by project name (case-insensitive)."""
     key = project_name.lower().strip()
     
@@ -156,12 +156,15 @@ def get_data(client: str, project: str, start: str, end: str) -> pd.DataFrame:
 
 if __name__ == "__main__":
     # 1)
+    
+    
     start = input("Start period (DD-MM or DD-MM-YYYY): ").strip()
     end   = input("End   period (DD-MM or DD-MM-YYYY): ").strip()
 
     try:
         start_iso = to_iso_format(start, is_end=False)
         end_iso   = to_iso_format(end,   is_end=True)
+        
     except ValueError as e:
         print("❌ Error parsing dates:", e)
         sys.exit(1)
