@@ -11,8 +11,8 @@ import sys
 import re
 import os
 
-API_KEY      = 'NmYxYzcxZDItYTk2OS00MjljLTlhMzktYWE2ZWRmZTg0Njc5'
-# API_KEY      = 'ZTlkNGRlNzQtZDBkMy00NDY0LWEyZTQtMzdhZTQ0YjlmOWM4'
+# API_KEY      = 'NmYxYzcxZDItYTk2OS00MjljLTlhMzktYWE2ZWRmZTg0Njc5'
+API_KEY      = 'ZTlkNGRlNzQtZDBkMy00NDY0LWEyZTQtMzdhZTQ0YjlmOWM4'
 WORKSPACE_ID = '66052c545402842181578e74'
 BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
