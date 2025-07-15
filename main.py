@@ -1,21 +1,33 @@
 from collections import defaultdict
 from datetime import datetime
-from jinja2 import Template
 from pathlib import Path
 import pandas as pd
-
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.enums import TA_LEFT
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from babel.dates import format_date
 import requests
-from weasyprint import HTML, CSS
 import locale
 import sys
 import re
-import os
 
 # API_KEY      = 'NmYxYzcxZDItYTk2OS00MjljLTlhMzktYWE2ZWRmZTg0Njc5'
 API_KEY      = 'ZTlkNGRlNzQtZDBkMy00NDY0LWEyZTQtMzdhZTQ0YjlmOWM4'
 WORKSPACE_ID = '66052c545402842181578e74'
 BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
+
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATE_DIR = BASE_DIR / "app" / "templates"
+STATIC_DIR = BASE_DIR / "static"
+
+COMPANY_NAME = "Inpro Analytics GmbH"
+LOGO_PATH = STATIC_DIR / "Logo mit Slogan.png"
+TEMPLATE_PATH = TEMPLATE_DIR / "report_template.html"
+CSS_PATH = STATIC_DIR / "styles.css"
 
 PAGE_SIZE = 1000
 
@@ -257,89 +269,164 @@ def get_data(client: str, project: str, start: str, end: str) -> pd.DataFrame:
     return df_proj
 
 
-def render_report_html(df, client, project, months_range, total_hours, template_path, logo_url) -> str:
-    """
-    Rendert den HTML-Report als String.
-    """
-
-    # Tabelle vorbereiten
-    df_display = (
-        df[["description", "task_name", "start", "duration_hours"]]
-        .rename(columns={
-            "description": "Beschreibung",
-            "task_name":   "Aufgabe",
-            "start":       "Datum",
-            "duration_hours": "Dauer"
-        })
-        .fillna("")
+def generate_report_pdf(
+    output_file,
+    logo_path,
+    company_name,
+    months_range,
+    rows,
+    total_hours
+):
+    doc = SimpleDocTemplate(
+        output_file,
+        pagesize=A4,
+        leftMargin=18*mm,
+        rightMargin=10*mm,
+        topMargin=10*mm,
+        bottomMargin=10*mm
     )
-    df_display['Dauer'] = pd.to_numeric(df_display['Dauer'], errors='coerce')
-    df_display['Dauer'] = df_display['Dauer'].fillna(0).apply(lambda x: f"{x:.2f}".replace('.', ','))
-    df_display['_dt'] = pd.to_datetime(df_display['Datum'], format='%d.%m.%Y', dayfirst=True)
-    df_display = df_display.sort_values(by='_dt').drop(columns=['_dt'])
-    rows = df_display.to_dict(orient='records') or [{"Beschreibung": "", "Aufgabe": "", "Datum": "", "Dauer": ""}]
 
-    # Template laden und rendern
-    with open(template_path, encoding="utf-8") as f:
-        tpl = Template(f.read())
+    styles = getSampleStyleSheet()
+    elements = []
 
-    rendered = tpl.render(
-        client=client,
-        project=project,
-        months_range=months_range,
-        logo=logo_url,
-        rows=rows,
-        total_hours=f"{total_hours:.2f}".replace(".", ",")
-    )
-    return rendered
+    # HEADER
+    header_table_data = []
+    header_row = []
 
+    header_row.append(Paragraph(
+        company_name,
+        ParagraphStyle(
+            name='Company',
+            fontSize=14,
+            alignment=TA_LEFT,
+            wordWrap='None',       # отключаем переносы (можно 'None' или 'CJK' для блокировки)
+            splitLongWords=False, # запрещаем разрезать слова
+            allowWidows=0,
+            allowOrphans=0,
+            leading=16                # высота строки (чтобы строки не слипались)       
+        )
+    ))  
 
-def save_html_file(html_content: str, filename: str):
-    """
-    Speichert den gerenderten HTML-String als Datei.
-    """
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(html_content)
-    print(f"✅ HTML-Datei gespeichert als {filename}")
-
-
-def convert_html_to_pdf_and_cleanup(html_filename: str, csv_filename: str, df: pd.DataFrame, client: str, project: str, css_file: Path):
-    """
-    Konvertiert HTML in PDF mit korrektem Namen und löscht die HTML- und CSV-Datei.
-    """
-    # Monat und Jahr bestimmen aus den Daten
-    first_date = pd.to_datetime(df["start"], dayfirst=True).sort_values().iloc[0]
-    monat = f"{first_date.month:02d}"
-    jahr  = f"{first_date.year}"
-
-    # PDF-Dateiname bestimmen
-    if project.strip().lower() in ("alle projekte", "alle"):
-        pdf_filename = f"Stundenauflistung_{client}_{monat}_{jahr}.pdf"
-    else:
-        pdf_filename = f"Stundenauflistung_{client}_{project}_{monat}_{jahr}.pdf"
-
-    # PDF erzeugen
-    HTML(html_filename).write_pdf(
-        pdf_filename,
-        stylesheets=[CSS(str(css_file))]
-    )
-    print(f"✅ PDF wurde erstellt: {pdf_filename}")
-
-    # HTML löschen
-    try:
-        os.remove(html_filename)
-        print(f"🗑️ HTML-Datei {html_filename} wurde gelöscht")
-    except Exception as e:
-        print(f"⚠️ Fehler beim Löschen der HTML-Datei: {e}")
-
-    # CSV löschen
-    if csv_filename:
+    if logo_path and Path(logo_path).exists():
         try:
-            os.remove(csv_filename)
-            print(f"🗑️ CSV-Datei {csv_filename} wurde gelöscht")
+            img = Image(logo_path, width=25*mm, height=15*mm)
+            header_row.append(img)
         except Exception as e:
-            print(f"⚠️ Fehler beim Löschen der CSV-Datei: {e}")
+            print(f"[WARN] Logo konnte nicht geladen werden: {e}")
+            header_row.append('')
+    else:
+        header_row.append('')
 
+    header_table_data.append(header_row)
+
+    header_table = Table(header_table_data, colWidths=[120*mm, None])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (0,0), (0,0), 'LEFT'),   # Название — слева
+        ('ALIGN', (1,0), (1,0), 'RIGHT'),  # Логотип — справа
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 24))
+
+    # TITLE
+    title_style = ParagraphStyle(
+        name='Title',
+        fontSize=12,
+        leading=14,         # высота строки
+        alignment=TA_LEFT,  # выравнивание слева
+        spaceAfter=14,      # отступ снизу после заголовка
+        fontName='Helvetica-bold'  # жирный шрифт
+    )
+
+    title_text = f"Stundenaufstellung {months_range}"
+    title_para = Paragraph(title_text, title_style)
+    # Оборачиваем параграф в таблицу для дополнительного управления выравниванием и стилями
+    title_table = Table([[title_para]], colWidths=[180*mm])  # ширина таблицы по желанию
+    title_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+        ('ALIGN', (2,1), (-1,-2), 'CENTER'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        # Убрать GRID или поставить тонкую серую линию, если нужно
+        # ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+    ]))
+    # Добавляем в список элементов для сборки PDF
+    elements.append(title_table)
+    elements.append(Spacer(1, 24))  # Отступ после заголовка
+
+
+    # TABLE 
+    cell_style = ParagraphStyle(
+        name='BodyTextLeft',
+        parent=styles['BodyText'],
+        alignment=TA_LEFT,
+        wordWrap='CJK', # перенос по словам
+        leading=12,
+    )
+    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
+
+    for row in rows:
+        beschreibung_paragraph = Paragraph(row[0], cell_style)
+        aufgabe_paragraph = Paragraph(row[1], cell_style)
+        datum = row[2]
+        dauer = row[3]
+        table_data.append([beschreibung_paragraph, aufgabe_paragraph, datum, dauer])
+
+    table_data.append(['Gesamtaufwand:', '', '', f"{total_hours:.2f}".replace('.', ',') + " h"])
+
+    tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
+
+    style = TableStyle([
+        # Шапка — жирный, все колонки по центру вертикально
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('VALIGN', (0,0), (-1,0), 'MIDDLE'),
+        ('BACKGROUND', (0,0), (-1,0), colors.white),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+
+        # В шапке колонки 3 и 4 по центру горизонтально
+        ('ALIGN', (2,0), (3,0), 'CENTER'),
+        ('VALIGN', (2,0), (3,0), 'MIDDLE'),
+
+        # Данные: 1 и 2 колонка — выравнивание слева сверху
+        ('ALIGN', (0,1), (1,-2), 'LEFT'),
+        ('VALIGN', (0,1), (1,-2), 'TOP'),
+
+        # Данные: 3 и 4 колонка — по центру горизонтально и вертикально
+        ('ALIGN', (2,1), (3,-2), 'CENTER'),
+        ('VALIGN', (2,1), (3,-2), 'MIDDLE'),
+
+        # Итоговая строка — жирная и светлый фон, с отступами и выравниванием
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eaeaea")),
+        ('TOPPADDING', (0,-1), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,-1), (-1,-1), 6),
+        ('ALIGN', (3,-1), (3,-1), 'CENTER'),
+
+        # Сетка
+        ('GRID', (0,0), (-1,-1), 0.01, colors.HexColor("#555555")),
+    ])
+
+    for i in range(1, len(table_data)-1):
+        if i % 2 == 0:
+            style.add('BACKGROUND', (0,i), (-1,i), colors.whitesmoke)
+        else:
+            style.add('BACKGROUND', (0,i), (-1,i), colors.HexColor("#eaeaea"))
+
+    last_row = len(table_data) - 1
+    style.add('FONTNAME', (0,last_row), (-1,last_row), 'Helvetica-Bold')
+    style.add('BACKGROUND', (0,last_row), (-1,last_row), colors.HexColor("#eaeaea"))
+    style.add('TOPPADDING', (0,last_row), (-1,last_row), 6)
+    style.add('BOTTOMPADDING', (0,last_row), (-1,last_row), 6)
+    style.add('ALIGN', (3,last_row), (3,last_row), 'CENTER')
+
+    tbl.setStyle(style)
+    elements.append(tbl)
+    doc.build(elements)
+    print(f"✅ PDF wurde erstellt: {output_file}")
 
 
 def get_months_range_string(df: pd.DataFrame) -> str:
@@ -400,7 +487,7 @@ def get_months_range_string(df: pd.DataFrame) -> str:
         block_parts = []
         for block in blocks:
             if len(block) > 1:
-                month_names = [datetime(year, m, 1).strftime("%B") for m in block]
+                month_names = [format_date(datetime(year, m, 1), "MMMM", locale='de') for m in block]
                 block_parts.append("/".join(month_names) + f" {year}")
             else:
                 month_name = datetime(year, block[0], 1).strftime("%B") + f" {year}"
@@ -471,11 +558,7 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
             project_name = df_proj['project_name'].iloc[0]
             print(f"✅ Projekt gefiltert: {project_name} ({len(df_proj)} Einträge).")
 
-        # --- CSV speichern ---
-        client_name = df_proj['client_name'].iloc[0]
-        csv_filename = f"report_{client_name}_{project_name}.csv"
-        df_proj[['description', 'task_name', 'start', 'duration_hours']].to_csv(csv_filename, index=False)
-        print(f"✅ Report for client “{client_name}”, project “{project_name}” saved as {csv_filename} ({len(df_proj)} rows)\n")
+        client_name = df_proj['client_name'].iloc[0] 
 
         # --- Monatsbereich berechnen ---
         df_proj['month_year'] = pd.to_datetime(df_proj['start'], dayfirst=True).dt.strftime('%B %Y')
@@ -484,29 +567,28 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
         # --- Total hours ---
         total_hours = df_proj['duration_hours'].sum()
 
-        # --- 1) Render HTML ---
-        rendered_html = render_report_html(
-            df_proj,
-            client_name,
-            project_name,
-            months_range,
-            total_hours,
-            template_path=template_path,
-            logo_url=logo_file.as_uri()
-        )
+        data_rows = [
+        [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
+        for _, row in df_proj.iterrows()
+    ]
 
-        # --- 2) Save HTML to file ---
-        html_filename = f"report_{client_name}_{project_name}.html"
-        save_html_file(rendered_html, html_filename)
+        # PDF file name
+        first_date = pd.to_datetime(df_proj["start"], dayfirst=True).sort_values().iloc[0]
+        monat = f"{first_date.month:02d}"
+        jahr = f"{first_date.year}"
+        if project_name.strip().lower() in ("alle projekte", "alle"):
+            pdf_filename = f"Stundenauflistung_{client_name}_{monat}_{jahr}.pdf"
+        else:
+            pdf_filename = f"Stundenauflistung_{client_name}_{project_name}_{monat}_{jahr}.pdf"
 
-        # --- 3) Convert to PDF and delete HTML ---
-        convert_html_to_pdf_and_cleanup(
-            html_filename=html_filename,
-            csv_filename=csv_filename,
-            df=df_proj,
-            client=client_name,
-            project=project_name,
-            css_file=css_file
+        # Create PDF
+        generate_report_pdf(
+            output_file=pdf_filename,
+            logo_path=str(LOGO_PATH),
+            company_name=COMPANY_NAME,
+            months_range=months_range,
+            rows=data_rows,
+            total_hours=total_hours
         )
 
         print(f"✅ Kompletter Report für {client_name} / {project_name} fertig!\n")
@@ -519,20 +601,13 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
 
 
 if __name__ == "__main__":
-    # --- Basis-Verzeichnisse ---
-    BASE_DIR     = Path(__file__).resolve().parent
-    TEMPLATE_DIR = BASE_DIR / "app" / "templates"
-    STATIC_DIR   = BASE_DIR / "static"
 
-    template_path = TEMPLATE_DIR / "report_template.html"
-    logo_file     = STATIC_DIR / "Logo mit Slogan.png"
-    css_file      = STATIC_DIR / "styles.css"
-
-    # --- Check static assets ---
-    if not logo_file.exists():
-        raise FileNotFoundError(f"❌ Logo not found at path {logo_file}")
-    if not css_file.exists():
-        raise FileNotFoundError(f"❌ CSS file not found at path {css_file}")
+    if not LOGO_PATH.exists():
+        raise FileNotFoundError(f"❌ Logo not found at path {LOGO_PATH}")
+    if not CSS_PATH.exists():
+        raise FileNotFoundError(f"❌ CSS file not found at path {CSS_PATH}")
+    if not TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"❌ Template file not found at path {TEMPLATE_PATH}")
 
     # --- Zeitraum wählen und Daten laden ---
     start_iso, end_iso = choose_period()
@@ -543,4 +618,5 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # --- Hauptloop für Reports ---
-    process_reports_loop(df_date, template_path, logo_file, css_file)
+    process_reports_loop(df_date, TEMPLATE_PATH, LOGO_PATH, CSS_PATH)
+
