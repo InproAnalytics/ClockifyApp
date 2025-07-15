@@ -128,7 +128,7 @@ def get_entries_by_date(start_iso: str, end_iso: str) -> pd.DataFrame:
         df['user_name']    = user['name']
         df['client_name']  = df.get('project.clientName', '').fillna('').astype(str)
         df['project_name'] = df.get('project.name',       '').fillna('').astype(str)
-        df['task_name'] = df.get('task.name', pd.Series(dtype='object')).fillna('').astype(str)
+        df['task_name'] = df.get('task.name', pd.Series(dtype='object')).fillna('Allgemein').replace('', 'Allgemein').astype(str)
 
 
         # Format the start timestamp as DD.MM.YYYY
@@ -199,32 +199,61 @@ def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
     # 1) fetch clients and build pure map
     clients = fetch_all(f"/workspaces/{WORKSPACE_ID}/clients")
     name_map = build_client_name_map(clients)
+    available_names = sorted(name_map.keys())
+
+    print("\n Verfügbare Cliente:")
+    for i, client in enumerate(available_names, start=1):
+        print(f"  {i}. {client}")
+
+    print("\n Auswahlmöglichkeiten:")
+    print("  - ENTER ohne Eingabe = wiederholen")
+    print("  - Clientname/Nummer = genau ein Client auswählen")
+    print("    Beispiel: 1 oder Belvedere")
 
     while True:
-        choice = input("Client name (exact, or 'x' to quit): ").strip().lower()
-        if choice == 'x':
-            print("⛔ Cancelled by user.")
+        choice = input("\n Deine Auswahl: ").strip()
+
+        if choice.lower() == "x":
+            print("Programm wird beendet.")
             sys.exit(0)
-        # 2) attempt pure lookup
-        try:
-            client_id = select_client_id(name_map, choice)
-        except KeyError:
-            print(f"❌ Client '{choice}' not found. Available: {sorted(name_map)}")
-            continue
-        except ValueError as e:
-            print(f"❌ {e}. Please disambiguate.")
+
+        if choice == "":
+            # User wants all projects
+            print("Bitte einen Client auswählen.")
             continue
 
-        # 3) filter DataFrame and verify non-empty
+        # Number selection
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(available_names):
+                selected_name = available_names[idx - 1]
+                print(f"Ausgewählter Client (Nummer): {selected_name}")
+            else:
+                print("❌ Fehler: Ungültige Nummer. Bitte erneut versuchen.")
+                continue
+        else:
+            selected_name = choice.lower()
+            if selected_name not in name_map:
+                print("❌ Fehler: Client nicht gefunden. Bitte erneut versuchen.")
+                continue
+            print(f"✅ Ausgewählter Client (Name): {selected_name}")
+
+        # Check for ambiguous IDs
+        try:
+            client_id = select_client_id(name_map, selected_name)
+        except ValueError as e:
+            print(f"❌ {e}. Bitte eindeutiger wählen.")
+            continue
+
+        # Filter DataFrame and verify non-empty
         df_client = df[
-            (df['client_name'].str.lower() == choice) &
+            (df['client_name'].str.lower() == selected_name) &
             (df['client_id'] == client_id)
         ]
         if df_client.empty:
-            print(f"❌ No entries for '{choice}' in this period. Try another.")
+            print(f"❌ Keine Einträge für '{selected_name}' in diesem Zeitraum. Bitte anderen auswählen.")
             continue
 
-        # 4) success!
         return df_client.copy()
 
 
@@ -236,23 +265,72 @@ def filter_by_project(df: pd.DataFrame, project_name: str) -> pd.DataFrame:
     return df[df['project_name'].str.lower() == key].copy()
 
 
-def filter_by_project_inter(df: pd.DataFrame) -> pd.DataFrame:
+def filter_by_project_inter(projects_in_client: list[str]) -> list[str]:
     """
-    Interactive: prompt for project name, then filter via filter_df_by_project.
+    Interactive user selection of projects.
+
+    The user can:
+    - press Enter to select all projects
+    - enter one project name
+    - enter multiple names or numbers separated by comma, dot, or space
+    - enter number(s) from the displayed list
+
+    Returns a list of selected project names.
     """
-    available = sorted(df['project_name'].dropna().unique())
-    available_lower = [p.lower() for p in available]
+    print("\n Verfügbare Projekte:")
+    for i, proj in enumerate(projects_in_client, start=1):
+        print(f"  {i}. {proj}")
+
+    print("\n Auswahlmöglichkeiten:")
+    print("  - ENTER ohne Eingabe = alle Projekte auswählen")
+    print("  - Projektname = genau ein Projekt auswählen")
+    print("  - mehrere Namen / Nummern mit Komma oder Punkt trennen")
+    print("    Beispiel: 1,2  oder  1.2  oder  Apfelsortenreport,Wartung")
 
     while True:
-        choice = input("Project name (exact, or 'x' to quit): ").strip()
-        if choice.lower() == 'x':
-            print("⛔ Cancelled by user.")
+        choice = input("\n Deine Auswahl: ").strip()
+
+        if choice.lower() == "x":
+            print("Programm wird beendet.")
             sys.exit(0)
-        if choice.lower() not in available_lower:
-            print("No such project. Available:", available)
+
+        if choice == "":
+            # User wants all projects
+            print("Alle Projekte ausgewählt.")
+            return projects_in_client.copy()
+
+        # Split input by , . or space
+        tokens = re.split(r'[,\.]+', choice)
+        tokens = [t.strip() for t in tokens if t.strip()]
+
+        if not tokens:
+            print("❌ Fehler: Keine Eingabe erkannt. Bitte erneut versuchen.")
             continue
 
-        return filter_by_project(df, choice)
+        # Check if all tokens are numbers
+        if all(t.isdigit() for t in tokens):
+            try:
+                idxs = [int(t) for t in tokens]
+                selected = []
+                for idx in idxs:
+                    if 1 <= idx <= len(projects_in_client):
+                        selected.append(projects_in_client[idx - 1])
+                    else:
+                        raise ValueError
+                print(f"✅ Ausgewählte Projekte (Nummern): {selected}")
+                return selected
+            except ValueError:
+                print("❌ Fehler: Ungültige Nummer(n). Bitte erneut versuchen.")
+                continue
+
+        # Otherwise treat as names
+        matched = [p for p in projects_in_client if p in tokens]
+        if not matched:
+            print("❌ Fehler: Keine gültigen Projektnamen erkannt. Bitte erneut versuchen.")
+            continue
+
+        print(f"✅ Ausgewählte Projekte: {matched}")
+        return matched
 
 
 def get_data(client: str, project: str, start: str, end: str) -> pd.DataFrame:
@@ -262,8 +340,7 @@ def get_data(client: str, project: str, start: str, end: str) -> pd.DataFrame:
 
     df_date   = get_entries_by_date(start_iso, end_iso)
     print(df_date[['user_name','start','project_id']].head())
-    print("DEBUG: unique client names in df_date:", sorted(df_date['client_name'].dropna().unique().tolist()))
-
+ 
     df_client = filter_by_client(df_date, client)
     df_proj   = filter_by_project(df_client, project)
     return df_proj
@@ -339,7 +416,6 @@ def generate_report_pdf(
         spaceAfter=14,      # отступ снизу после заголовка
         fontName='Helvetica-bold'  # жирный шрифт
     )
-
     title_text = f"Stundenaufstellung {months_range}"
     title_para = Paragraph(title_text, title_style)
     # Оборачиваем параграф в таблицу для дополнительного управления выравниванием и стилями
@@ -356,7 +432,6 @@ def generate_report_pdf(
     # Добавляем в список элементов для сборки PDF
     elements.append(title_table)
     elements.append(Spacer(1, 24))  # Отступ после заголовка
-
 
     # TABLE 
     cell_style = ParagraphStyle(
@@ -407,12 +482,12 @@ def generate_report_pdf(
         ('ALIGN', (3,-1), (3,-1), 'CENTER'),
 
         # Сетка
-        ('GRID', (0,0), (-1,-1), 0.01, colors.HexColor("#555555")),
+        ('GRID', (0,0), (-1,-1), 0.001, colors.HexColor("#555555")),
     ])
 
     for i in range(1, len(table_data)-1):
         if i % 2 == 0:
-            style.add('BACKGROUND', (0,i), (-1,i), colors.whitesmoke)
+            style.add('BACKGROUND', (0,i), (-1,i), colors.white)
         else:
             style.add('BACKGROUND', (0,i), (-1,i), colors.HexColor("#eaeaea"))
 
@@ -520,66 +595,69 @@ def choose_period() -> tuple[str, str]:
 
 def load_entries_for_period(start_iso: str, end_iso: str) -> pd.DataFrame:
     df_date = get_entries_by_date(start_iso, end_iso)
-    print("DEBUG: rows after date filter:", len(df_date))
     return df_date
 
 
 def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: Path, css_file: Path):
     while True:
-        # --- Список клиентов в выборке ---
-        clients_in_period = sorted(df_date['client_name'].dropna().unique().tolist())
-        print("DEBUG: clients in period:", clients_in_period)
-
-        # --- Client filter ---
+        # --- Client auswählen ---
         df_client = filter_by_client_inter(df_date)
-        print("DEBUG: rows after client filter:", len(df_client))
 
-        # --- Список проектов для этого клиента ---
+        # --- Projekte für diesen Client filtern ---
         projects_in_client = sorted(
             df_client.get('project_name', df_client.get('project.name', pd.Series()))
             .dropna().unique().tolist()
         )
-        print("DEBUG: projects for client:", projects_in_client)
 
-        # --- Project selection mit Enter für Alle ---
-        project_choice = input("Project name (or just Enter for ALL): ").strip()
+        if not projects_in_client:
+            print("❌ Keine Projekte für diesen Client gefunden. Bitte anderen Client wählen.\n")
+            continue
 
-        if project_choice == "":
-            # User wants ALL projects for this client
-            df_proj = df_client.copy()
-            project_name = "Alle Projekte"
-            print(f"✅ Alle Projekte für Client werden genommen ({len(df_proj)} Einträge).")
+        # --- Projekt-Auswahl mit ENTER für alle ---
+        selected_projects = filter_by_project_inter(projects_in_client)
+
+        # --- Filtern nach ausgewählten Projekten ---
+        df_proj = df_client[df_client['project_name'].isin(selected_projects)].copy()
+        if df_proj.empty:
+            print(f"❌ Keine Einträge für die Auswahl {selected_projects}. Bitte erneut versuchen.\n")
+            continue
+
+        # --- Client-Name aus DataFrame holen ---
+        client_name = df_proj['client_name'].iloc[0]
+
+        # --- Project-Name sauber zusammenbauen ---
+        if len(selected_projects) == 1:
+            project_name = selected_projects[0]
         else:
-            # User specified one project
-            df_proj = filter_by_project(df_client, project_choice)
-            if df_proj.empty:
-                print(f"❌ No entries found for project '{project_choice}'. Please try again.\n")
-                continue
-            project_name = df_proj['project_name'].iloc[0]
-            print(f"✅ Projekt gefiltert: {project_name} ({len(df_proj)} Einträge).")
+            project_name = "_".join(selected_projects)
 
-        client_name = df_proj['client_name'].iloc[0] 
+        # Für Dateiname sicher machen
+        safe_project_name = project_name.replace("/", "_").replace(" ", "_")
+
+        print(f"✅ Gewählte Projekte: {project_name} ({len(df_proj)} Einträge).")
 
         # --- Monatsbereich berechnen ---
         df_proj['month_year'] = pd.to_datetime(df_proj['start'], dayfirst=True).dt.strftime('%B %Y')
         months_range = get_months_range_string(df_proj)
 
-        # --- Total hours ---
+        # --- Gesamtstunden berechnen ---
         total_hours = df_proj['duration_hours'].sum()
 
+        # --- Datenzeilen für Report vorbereiten ---
         data_rows = [
-        [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
-        for _, row in df_proj.iterrows()
-    ]
+            [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
+            for _, row in df_proj.iterrows()
+        ]
 
-        # PDF file name
+        # --- Dateiname für PDF generieren ---
         first_date = pd.to_datetime(df_proj["start"], dayfirst=True).sort_values().iloc[0]
         monat = f"{first_date.month:02d}"
         jahr = f"{first_date.year}"
+
         if project_name.strip().lower() in ("alle projekte", "alle"):
             pdf_filename = f"Stundenauflistung_{client_name}_{monat}_{jahr}.pdf"
         else:
-            pdf_filename = f"Stundenauflistung_{client_name}_{project_name}_{monat}_{jahr}.pdf"
+            pdf_filename = f"Stundenauflistung_{client_name}_{safe_project_name}_{monat}_{jahr}.pdf"
 
         # Create PDF
         generate_report_pdf(
@@ -590,13 +668,12 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
             rows=data_rows,
             total_hours=total_hours
         )
-
         print(f"✅ Kompletter Report für {client_name} / {project_name} fertig!\n")
 
-        # --- Continue? ---
-        again = input("Generate a report for another client/project? (y/N): ").strip().lower()
+        # --- Weitere Reports? ---
+        again = input("Möchten Sie einen weiteren Report erstellen? (y/N): ").strip().lower()
         if again not in ('y', 'yes'):
-            print("✅ Exiting.")
+            print("✅ Programm wird beendet.")
             break
 
 
