@@ -444,8 +444,10 @@ def generate_report_pdf(
     table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
 
     for row in rows:
-        beschreibung_paragraph = Paragraph(row[0], cell_style)
-        aufgabe_paragraph = Paragraph(row[1], cell_style)
+        beschreibung_text = "" if pd.isna(row[0]) else str(row[0])
+        aufgabe_text      = "Allgemein" if pd.isna(row[1]) else str(row[1])
+        beschreibung_paragraph = Paragraph(beschreibung_text, cell_style)
+        aufgabe_paragraph = Paragraph(aufgabe_text, cell_style)
         datum = row[2]
         dauer = row[3]
         table_data.append([beschreibung_paragraph, aufgabe_paragraph, datum, dauer])
