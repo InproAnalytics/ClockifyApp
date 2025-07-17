@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-import pandas as pd
+from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.enums import TA_LEFT
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
@@ -9,6 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from babel.dates import format_date
+import pandas as pd
 import requests
 import locale
 import sys
@@ -21,7 +22,7 @@ BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
 
 BASE_DIR = Path(__file__).resolve().parent
-TEMPLATE_DIR = BASE_DIR / "app" / "templates"
+TEMPLATE_DIR = BASE_DIR / "app_Flask" / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 COMPANY_NAME = "Inpro Analytics GmbH"
@@ -193,41 +194,63 @@ def filter_by_client(df: pd.DataFrame, client_name: str) -> pd.DataFrame:
 
 def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Interactive loop: prompt user until a valid client is selected.
-    Uses pure helpers to do the actual lookup.
+    Interactive selection menu for choosing a client from a DataFrame.
+    Shows only clients actually present in the given period.
+    If the client name is ambiguous (multiple IDs), prompts user to pick one.
     """
-    # 1) fetch clients and build pure map
-    clients = fetch_all(f"/workspaces/{WORKSPACE_ID}/clients")
-    name_map = build_client_name_map(clients)
+
+    # 0️⃣ Clean client_name column
+    df = df.copy()
+    df['client_name'] = (
+        df['client_name']
+        .fillna('')
+        .astype(str)
+        .str.strip()
+    )
+    df = df[df['client_name'] != ""]
+
+    # 1️⃣ Build client map only from available entries in the DataFrame
+    client_records = (
+        df[['client_id', 'client_name']]
+        .drop_duplicates()
+        .sort_values('client_name')
+    )
+
+    if client_records.empty:
+        print("❌ Keine Clients in diesem Zeitraum vorhanden.")
+        return df.iloc[0:0].copy()
+
+    # 2️⃣ Build name_map: lowercase client_name -> list of IDs
+    from collections import defaultdict
+    name_map = defaultdict(list)
+    for _, row in client_records.iterrows():
+        name_map[row['client_name'].lower()].append(row['client_id'])
+
     available_names = sorted(name_map.keys())
 
-    print("\n Verfügbare Cliente:")
-    for i, client in enumerate(available_names, start=1):
-        print(f"  {i}. {client}")
-
-    print("\n Auswahlmöglichkeiten:")
-    print("  - ENTER ohne Eingabe = wiederholen")
-    print("  - Clientname/Nummer = genau ein Client auswählen")
-    print("    Beispiel: 1 oder Belvedere")
-
+    # 3️⃣ Main selection loop
     while True:
-        choice = input("\n Deine Auswahl: ").strip()
+        print("\nVerfügbare Clients:")
+        for i, client in enumerate(available_names, 1):
+            print(f"  {i}. {client}")
+
+        print("\nAuswahlmöglichkeiten:")
+        print("  - Clientname/Nummer = genau ein Client auswählen")
+        print("    Beispiel: 1 oder 2  oder  Neuroth")
+        print("  - 'x' = Beenden")
+
+        choice = input("\nDeine Auswahl: ").strip()
 
         if choice.lower() == "x":
             print("Programm wird beendet.")
             sys.exit(0)
 
-        if choice == "":
-            # User wants all projects
-            print("Bitte einen Client auswählen.")
-            continue
-
-        # Number selection
+        # Number = selection by index
         if choice.isdigit():
             idx = int(choice)
             if 1 <= idx <= len(available_names):
                 selected_name = available_names[idx - 1]
-                print(f"Ausgewählter Client (Nummer): {selected_name}")
+                print(f"✅ Ausgewählter Client (Nummer): {selected_name}")
             else:
                 print("❌ Fehler: Ungültige Nummer. Bitte erneut versuchen.")
                 continue
@@ -238,22 +261,39 @@ def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
                 continue
             print(f"✅ Ausgewählter Client (Name): {selected_name}")
 
-        # Check for ambiguous IDs
-        try:
-            client_id = select_client_id(name_map, selected_name)
-        except ValueError as e:
-            print(f"❌ {e}. Bitte eindeutiger wählen.")
-            continue
+        # 4️⃣ Check IDs for this name
+        client_ids = name_map[selected_name]
+        if len(client_ids) == 1:
+            client_id = client_ids[0]
+        else:
+            # Multiple IDs found -> ask user to choose
+            print(f"\n⚠️ Mehrere IDs für '{selected_name}' gefunden:")
+            for i, cid in enumerate(client_ids, 1):
+                print(f"  {i}. ID = {cid}")
 
-        # Filter DataFrame and verify non-empty
+            while True:
+                sub_choice = input("Bitte Nummer oder ID eingeben: ").strip()
+                if sub_choice.isdigit():
+                    num = int(sub_choice)
+                    if 1 <= num <= len(client_ids):
+                        client_id = client_ids[num - 1]
+                        break
+                    if num in client_ids:
+                        client_id = num
+                        break
+                print("❌ Ungültige Eingabe. Bitte erneut versuchen.")
+
+        # 5️⃣ Filter DataFrame for this client
         df_client = df[
             (df['client_name'].str.lower() == selected_name) &
             (df['client_id'] == client_id)
         ]
+
         if df_client.empty:
-            print(f"❌ Keine Einträge für '{selected_name}' in diesem Zeitraum. Bitte anderen auswählen.")
+            print(f"❌ Keine Einträge für diesen Client in diesem Zeitraum. Bitte anderen auswählen.")
             continue
 
+        print(f"✅ {len(df_client)} Einträge gefunden für '{selected_name}' (ID={client_id})")
         return df_client.copy()
 
 
@@ -283,9 +323,10 @@ def filter_by_project_inter(projects_in_client: list[str]) -> list[str]:
 
     print("\n Auswahlmöglichkeiten:")
     print("  - ENTER ohne Eingabe = alle Projekte auswählen")
-    print("  - Projektname = genau ein Projekt auswählen")
+    print("  - Projektname / Nummer = genau ein Projekt auswählen")
     print("  - mehrere Namen / Nummern mit Komma oder Punkt trennen")
     print("    Beispiel: 1,2  oder  1.2  oder  Apfelsortenreport,Wartung")
+    print("  - 'x' = Beenden")
 
     while True:
         choice = input("\n Deine Auswahl: ").strip()
@@ -445,10 +486,10 @@ def generate_report_pdf(
 
     for row in rows:
         beschreibung_paragraph = Paragraph(row[0], cell_style)
-        aufgabe_paragraph = Paragraph(row[1], cell_style)
+        aufgabe = row[1]
         datum = row[2]
         dauer = row[3]
-        table_data.append([beschreibung_paragraph, aufgabe_paragraph, datum, dauer])
+        table_data.append([beschreibung_paragraph, aufgabe, datum, dauer])
 
     table_data.append(['Gesamtaufwand:', '', '', f"{total_hours:.2f}".replace('.', ',') + " h"])
 
@@ -461,14 +502,18 @@ def generate_report_pdf(
         ('BACKGROUND', (0,0), (-1,0), colors.white),
         ('TEXTCOLOR', (0,0), (-1,0), colors.black),
         ('FONTSIZE', (0,0), (-1,0), 10),
+        ('ALIGN', (0,0), (0,0), 'LEFT'),
+        ('VALIGN', (0,0), (0,0), 'MIDDLE'),
 
-        # В шапке колонки 3 и 4 по центру горизонтально
-        ('ALIGN', (2,0), (3,0), 'CENTER'),
-        ('VALIGN', (2,0), (3,0), 'MIDDLE'),
+        # В шапке колонки 2, 3 и 4 по центру горизонтально
+        ('ALIGN', (1,0), (3,0), 'CENTER'),
+        ('VALIGN', (1,0), (3,0), 'MIDDLE'),
 
         # Данные: 1 и 2 колонка — выравнивание слева сверху
-        ('ALIGN', (0,1), (1,-2), 'LEFT'),
-        ('VALIGN', (0,1), (1,-2), 'TOP'),
+        ('ALIGN', (0,1), (0,-2), 'LEFT'),  # Description
+        ('VALIGN', (0,1), (0,-2), 'TOP'),
+        ('ALIGN', (1,1), (1,-2), 'CENTER'),  # Aufgabe
+        ('VALIGN', (1,1), (1,-2), 'MIDDLE'),
 
         # Данные: 3 и 4 колонка — по центру горизонтально и вертикально
         ('ALIGN', (2,1), (3,-2), 'CENTER'),
@@ -504,6 +549,154 @@ def generate_report_pdf(
     print(f"✅ PDF wurde erstellt: {output_file}")
 
 
+def generate_report_pdf_bytes(
+    logo_path,
+    company_name,
+    months_range,
+    rows,
+    total_hours
+):
+    """
+    Generates the PDF and returns it as bytes (for use in Streamlit download_button).
+    """
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=18*mm,
+        rightMargin=10*mm,
+        topMargin=10*mm,
+        bottomMargin=10*mm
+    )
+
+    styles = getSampleStyleSheet()
+    elements = []
+
+    # HEADER
+    header_table_data = []
+    header_row = []
+
+    header_row.append(Paragraph(
+        company_name,
+        ParagraphStyle(
+            name='Company',
+            fontSize=14,
+            alignment=TA_LEFT,
+            leading=16,
+            wordWrap='None',
+            splitLongWords=False,
+            allowWidows=0,
+            allowOrphans=0
+        )
+    ))
+
+    if logo_path and Path(logo_path).exists():
+        try:
+            img = Image(logo_path, width=25*mm, height=15*mm)
+            header_row.append(img)
+        except Exception as e:
+            print(f"[WARN] Logo konnte nicht geladen werden: {e}")
+            header_row.append('')
+    else:
+        header_row.append('')
+
+    header_table_data.append(header_row)
+
+    header_table = Table(header_table_data, colWidths=[120*mm, None])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (0,0), (0,0), 'LEFT'),
+        ('ALIGN', (1,0), (1,0), 'RIGHT'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 24))
+
+    # TITLE
+    title_style = ParagraphStyle(
+        name='Title',
+        fontSize=12,
+        leading=14,
+        alignment=TA_LEFT,
+        spaceAfter=14,
+        fontName='Helvetica-bold'
+    )
+    title_text = f"Stundenaufstellung {months_range}"
+    title_para = Paragraph(title_text, title_style)
+    title_table = Table([[title_para]], colWidths=[180*mm])
+    title_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(title_table)
+    elements.append(Spacer(1, 24))
+
+    # TABLE
+    cell_style = ParagraphStyle(
+        name='BodyTextLeft',
+        parent=styles['BodyText'],
+        alignment=TA_LEFT,
+        wordWrap='CJK',
+        leading=12,
+    )
+    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
+
+    for row in rows:
+        beschreibung_paragraph = Paragraph(row[0], cell_style)
+        aufgabe = row[1]
+        datum = row[2]
+        dauer = row[3]
+        table_data.append([beschreibung_paragraph, aufgabe, datum, dauer])
+
+    table_data.append(['Gesamtaufwand:', '', '', f"{total_hours:.2f}".replace('.', ',') + " h"])
+
+    tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
+
+    style = TableStyle([
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('VALIGN', (0,0), (-1,0), 'MIDDLE'),
+        ('BACKGROUND', (0,0), (-1,0), colors.white),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+        ('ALIGN', (0,0), (0,0), 'LEFT'),
+        ('VALIGN', (0,0), (0,0), 'MIDDLE'),
+
+        ('ALIGN', (1,0), (3,0), 'CENTER'),
+        ('VALIGN', (1,0), (3,0), 'MIDDLE'),
+        ('ALIGN', (2,0), (3,0), 'CENTER'),
+        ('VALIGN', (2,0), (3,0), 'MIDDLE'),
+        ('ALIGN', (0,1), (0,-2), 'LEFT'),  # Description
+        ('VALIGN', (0,1), (0,-2), 'TOP'),
+        ('ALIGN', (1,1), (1,-2), 'CENTER'),  # Aufgabe
+        ('VALIGN', (1,1), (1,-2), 'MIDDLE'),
+        ('ALIGN', (2,1), (3,-2), 'CENTER'),
+        ('VALIGN', (2,1), (3,-2), 'MIDDLE'),
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eaeaea")),
+        ('TOPPADDING', (0,-1), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,-1), (-1,-1), 6),
+        ('ALIGN', (3,-1), (3,-1), 'CENTER'),
+        ('GRID', (0,0), (-1,-1), 0.001, colors.HexColor("#555555")),
+    ])
+
+    for i in range(1, len(table_data)-1):
+        if i % 2 == 0:
+            style.add('BACKGROUND', (0,i), (-1,i), colors.white)
+        else:
+            style.add('BACKGROUND', (0,i), (-1,i), colors.HexColor("#eaeaea"))
+
+    tbl.setStyle(style)
+    elements.append(tbl)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def get_months_range_string(df: pd.DataFrame) -> str:
     """
     Returns a string like:
@@ -522,6 +715,9 @@ def get_months_range_string(df: pd.DataFrame) -> str:
 
     if df.empty:
         return ""
+
+    # Make sure it's a real copy!
+    df = df.copy()
 
     # Convert 'start' column to datetime, safely
     df["start_dt"] = pd.to_datetime(df["start"], format="%d.%m.%Y", errors="coerce")
@@ -598,6 +794,25 @@ def load_entries_for_period(start_iso: str, end_iso: str) -> pd.DataFrame:
     return df_date
 
 
+def build_pdf_filename(client_name: str, selected_projects: list[str], first_date: pd.Timestamp) -> str:
+    """
+    Generate the standard PDF filename given client, selected projects, and a date.
+    """
+    # Clean projects for filename
+    if not selected_projects or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects):
+        project_part = ""
+    elif len(selected_projects) == 1:
+        project_part = f"_{selected_projects[0].replace('/', '_').replace(' ', '_')}"
+    else:
+        project_part = "_" + "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
+
+    # Monat und Jahr aus Datum
+    monat = f"{first_date.month:02d}"
+    jahr = f"{first_date.year}"
+
+    return f"Stundenauflistung_{client_name}{project_part}_{monat}_{jahr}.pdf"
+
+
 def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: Path, css_file: Path):
     while True:
         # --- Client auswählen ---
@@ -644,6 +859,15 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
         total_hours = df_proj['duration_hours'].sum()
 
         # --- Datenzeilen für Report vorbereiten ---
+        for col in ['description', 'task_name']:
+            df_proj[col] = (
+                df_proj[col]
+                .fillna('Allgemein')
+                .astype(str)
+                .str.strip()
+                .replace(r'^$', 'Allgemein', regex=True)
+            )
+            
         data_rows = [
             [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
             for _, row in df_proj.iterrows()
@@ -651,13 +875,7 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
 
         # --- Dateiname für PDF generieren ---
         first_date = pd.to_datetime(df_proj["start"], dayfirst=True).sort_values().iloc[0]
-        monat = f"{first_date.month:02d}"
-        jahr = f"{first_date.year}"
-
-        if project_name.strip().lower() in ("alle projekte", "alle"):
-            pdf_filename = f"Stundenauflistung_{client_name}_{monat}_{jahr}.pdf"
-        else:
-            pdf_filename = f"Stundenauflistung_{client_name}_{safe_project_name}_{monat}_{jahr}.pdf"
+        pdf_filename = build_pdf_filename(client_name, selected_projects, first_date)
 
         # Create PDF
         generate_report_pdf(
