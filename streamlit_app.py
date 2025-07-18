@@ -151,6 +151,12 @@ if st.session_state.data_loaded and not st.session_state.final_confirmed:
                     df_selected = df_client[
                         df_client['project_name'].isin(st.session_state.selected_projects)
                     ]
+                    df_selected = df_selected.sort_values(
+                        by='start',
+                        key=lambda x: pd.to_datetime(x, dayfirst=True),
+                        ascending=True  # чтобы от старых к новым
+                    )
+
 
                     if df_selected.empty:
                         st.warning("⚠️ Keine Einträge für die gewählten Projekte!")
@@ -179,12 +185,16 @@ if st.session_state.data_loaded and not st.session_state.final_confirmed:
                             total_hours=total_hours
                         )
 
-                    first_date = pd.to_datetime(df_selected["start"], dayfirst=True).sort_values().iloc[0]
+                    start_dates = pd.to_datetime(df_selected["start"], dayfirst=True, errors="coerce").sort_values()
+                    first_date = start_dates.iloc[0]
+                    last_date = start_dates.iloc[-1]
                     pdf_filename = build_pdf_filename(
                         st.session_state.client_selected,
                         st.session_state.selected_projects,
-                        first_date
+                        first_date,
+                        last_date
                     )
+
 
                     st.download_button(
                         label="📥 PDF herunterladen",

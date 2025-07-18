@@ -489,15 +489,14 @@ def generate_report_pdf(
     table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
 
     for row in rows:
-        beschreibung_text = "" if pd.isna(row[0]) else str(row[0])
-        aufgabe_text      = "Allgemein" if pd.isna(row[1]) else str(row[1])
-        beschreibung_paragraph = Paragraph(beschreibung_text, cell_style)
-        aufgabe_paragraph = Paragraph(aufgabe_text, cell_style)
+        beschreibung_paragraph = Paragraph(row[0], cell_style)
+        aufgabe = row[1]
         datum = row[2]
         dauer = row[3]
-        table_data.append([beschreibung_paragraph, aufgabe_paragraph, datum, dauer])
+        table_data.append([beschreibung_paragraph, aufgabe, datum, dauer])
+    table_data.append(['Gesamtaufwand:', '', '', f"{total_hours:.2f}".replace('.', ',') + " h"])
 
-        tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
+    tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
 
     style = TableStyle([
         # Шапка — жирный, все колонки по центру вертикально
@@ -516,7 +515,7 @@ def generate_report_pdf(
         # Данные: 1 и 2 колонка — выравнивание слева сверху
         ('ALIGN', (0,1), (0,-2), 'LEFT'),  # Description
         ('VALIGN', (0,1), (0,-2), 'TOP'),
-        ('ALIGN', (1,1), (1,-2), 'CENTER'),  # Aufgabe
+        ('ALIGN', (1,1), (1,-2), 'LEFT'),  # Aufgabe
         ('VALIGN', (1,1), (1,-2), 'MIDDLE'),
 
         # Данные: 3 и 4 колонка — по центру горизонтально и вертикально
@@ -668,14 +667,13 @@ def generate_report_pdf_bytes(
         ('FONTSIZE', (0,0), (-1,0), 10),
         ('ALIGN', (0,0), (0,0), 'LEFT'),
         ('VALIGN', (0,0), (0,0), 'MIDDLE'),
-
         ('ALIGN', (1,0), (3,0), 'CENTER'),
         ('VALIGN', (1,0), (3,0), 'MIDDLE'),
         ('ALIGN', (2,0), (3,0), 'CENTER'),
         ('VALIGN', (2,0), (3,0), 'MIDDLE'),
         ('ALIGN', (0,1), (0,-2), 'LEFT'),  # Description
         ('VALIGN', (0,1), (0,-2), 'TOP'),
-        ('ALIGN', (1,1), (1,-2), 'CENTER'),  # Aufgabe
+        ('ALIGN', (1,1), (1,-2), 'LEFT'),  # Aufgabe
         ('VALIGN', (1,1), (1,-2), 'MIDDLE'),
         ('ALIGN', (2,1), (3,-2), 'CENTER'),
         ('VALIGN', (2,1), (3,-2), 'MIDDLE'),
@@ -798,9 +796,15 @@ def load_entries_for_period(start_iso: str, end_iso: str) -> pd.DataFrame:
     return df_date
 
 
-def build_pdf_filename(client_name: str, selected_projects: list[str], first_date: pd.Timestamp) -> str:
+def build_pdf_filename(
+    client_name: str,
+    selected_projects: list[str],
+    first_date: pd.Timestamp,
+    last_date: pd.Timestamp
+) -> str:
     """
-    Generate the standard PDF filename given client, selected projects, and a date.
+    Generate the standard PDF filename including all months in the range.
+    Format: Stundenauflistung_Client_Project_MM[_MM...]_YYYY or MM_YYYY-MM_YYYY if years differ
     """
     # Clean projects for filename
     if not selected_projects or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects):
@@ -810,19 +814,38 @@ def build_pdf_filename(client_name: str, selected_projects: list[str], first_dat
     else:
         project_part = "_" + "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
 
-    # Monat und Jahr aus Datum
-    monat = f"{first_date.month:02d}"
-    jahr = f"{first_date.year}"
+    # Collect all months between first_date and last_date
+    months = []
+    current = first_date.replace(day=1)
+    while current <= last_date:
+        months.append((f"{current.month:02d}", f"{current.year}"))
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1)
+        else:
+            current = current.replace(month=current.month + 1)
 
-    return f"Stundenauflistung_{client_name}{project_part}_{monat}_{jahr}.pdf"
+    # Group by year
+    years = {}
+    for m, y in months:
+        years.setdefault(y, []).append(m)
+
+    if len(years) == 1:
+        jahr = list(years.keys())[0]
+        monate_part = "_".join(years[jahr])
+        period_part = f"{monate_part}_{jahr}"
+    else:
+        period_parts = ["_".join(ms) + f"_{y}" for y, ms in years.items()]
+        period_part = "--".join(period_parts)
+
+    return f"Stundenauflistung_{client_name}{project_part}_{period_part}.pdf"
 
 
 def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: Path, css_file: Path):
     while True:
-        # --- Client auswählen ---
+        # --- Select client ---
         df_client = filter_by_client_inter(df_date)
 
-        # --- Projekte für diesen Client filtern ---
+        # --- Filter available projects for that client ---
         projects_in_client = sorted(
             df_client.get('project_name', df_client.get('project.name', pd.Series()))
             .dropna().unique().tolist()
@@ -832,37 +855,37 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
             print("❌ Keine Projekte für diesen Client gefunden. Bitte anderen Client wählen.\n")
             continue
 
-        # --- Projekt-Auswahl mit ENTER für alle ---
+        # --- Project selection ---
         selected_projects = filter_by_project_inter(projects_in_client)
 
-        # --- Filtern nach ausgewählten Projekten ---
+        # --- Filter by selected projects ---
         df_proj = df_client[df_client['project_name'].isin(selected_projects)].copy()
         if df_proj.empty:
             print(f"❌ Keine Einträge für die Auswahl {selected_projects}. Bitte erneut versuchen.\n")
             continue
 
-        # --- Client-Name aus DataFrame holen ---
+        # --- Get client name ---
         client_name = df_proj['client_name'].iloc[0]
 
-        # --- Project-Name sauber zusammenbauen ---
+        # --- Create printable project name ---
         if len(selected_projects) == 1:
             project_name = selected_projects[0]
         else:
             project_name = "_".join(selected_projects)
 
-        # Für Dateiname sicher machen
-        safe_project_name = project_name.replace("/", "_").replace(" ", "_")
-
         print(f"✅ Gewählte Projekte: {project_name} ({len(df_proj)} Einträge).")
 
-        # --- Monatsbereich berechnen ---
-        df_proj['month_year'] = pd.to_datetime(df_proj['start'], dayfirst=True).dt.strftime('%B %Y')
+        # --- Format month_year column ---
+        df_proj['month_year'] = pd.to_datetime(df_proj['start'], dayfirst=True).dt.strftime('%m.%Y')
         months_range = get_months_range_string(df_proj)
 
-        # --- Gesamtstunden berechnen ---
+        # --- Calculate total hours ---
         total_hours = df_proj['duration_hours'].sum()
 
-        # --- Datenzeilen für Report vorbereiten ---
+        # --- Sort by date ---
+        df_proj = df_proj.sort_values(by='start', key=lambda x: pd.to_datetime(x, dayfirst=True), ascending=True)
+
+        # --- Prepare table data ---
         for col in ['description', 'task_name']:
             df_proj[col] = (
                 df_proj[col]
@@ -871,20 +894,23 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
                 .str.strip()
                 .replace(r'^$', 'Allgemein', regex=True)
             )
-            
+
         data_rows = [
             [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
             for _, row in df_proj.iterrows()
         ]
 
-        # --- Dateiname für PDF generieren ---
-        first_date = pd.to_datetime(df_proj["start"], dayfirst=True).sort_values().iloc[0]
-        pdf_filename = build_pdf_filename(client_name, selected_projects, first_date)
+        # --- Create PDF filename ---
+        start_dates = pd.to_datetime(df_proj["start"], dayfirst=True, errors="coerce")
+        first_date = start_dates.min()
+        last_date = start_dates.max()
 
-        # Create PDF
+        pdf_filename = build_pdf_filename(client_name, selected_projects, first_date, last_date)
+
+        # --- Generate PDF ---
         generate_report_pdf(
             output_file=pdf_filename,
-            logo_path=str(LOGO_PATH),
+            logo_path=str(logo_file),
             company_name=COMPANY_NAME,
             months_range=months_range,
             rows=data_rows,
@@ -892,7 +918,7 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
         )
         print(f"✅ Kompletter Report für {client_name} / {project_name} fertig!\n")
 
-        # --- Weitere Reports? ---
+        # --- Ask for another report ---
         again = input("Möchten Sie einen weiteren Report erstellen? (y/N): ").strip().lower()
         if again not in ('y', 'yes'):
             print("✅ Programm wird beendet.")
@@ -902,13 +928,13 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
 if __name__ == "__main__":
 
     if not LOGO_PATH.exists():
-        raise FileNotFoundError(f"❌ Logo not found at path {LOGO_PATH}")
+        raise FileNotFoundError(f"❌ Logo nicht gefunden: {LOGO_PATH}")
     if not CSS_PATH.exists():
-        raise FileNotFoundError(f"❌ CSS file not found at path {CSS_PATH}")
+        raise FileNotFoundError(f"❌ CSS-Datei nicht gefunden: {CSS_PATH}")
     if not TEMPLATE_PATH.exists():
-        raise FileNotFoundError(f"❌ Template file not found at path {TEMPLATE_PATH}")
+        raise FileNotFoundError(f"❌ Template nicht gefunden: {TEMPLATE_PATH}")
 
-    # --- Zeitraum wählen und Daten laden ---
+    # --- Select time period and load data ---
     start_iso, end_iso = choose_period()
     df_date = load_entries_for_period(start_iso, end_iso)
 
@@ -916,6 +942,5 @@ if __name__ == "__main__":
         print("⚠️ Keine Daten im gewählten Zeitraum!")
         sys.exit(0)
 
-    # --- Hauptloop für Reports ---
+    # --- Start processing reports ---
     process_reports_loop(df_date, TEMPLATE_PATH, LOGO_PATH, CSS_PATH)
-
