@@ -15,12 +15,12 @@ import locale
 import sys
 import re
 import os
-from dotenv import load_dotenv
+
 
 # auto-loads the .env file
-load_dotenv()
 
-API_KEY      = os.getenv("CLOCKIFY_API_KEY")
+
+API_KEY      = 'NmYxYzcxZDItYTk2OS00MjljLTlhMzktYWE2ZWRmZTg0Njc5'
 WORKSPACE_ID = '66052c545402842181578e74'
 BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
