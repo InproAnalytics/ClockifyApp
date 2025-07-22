@@ -15,12 +15,13 @@ import locale
 import sys
 import re
 import os
+import streamlit as st
 
 
 # auto-loads the .env file
 
 
-API_KEY      = os.getenv("API_KEY")
+API_KEY      = st.secrets["API_KEY"]
 WORKSPACE_ID = '66052c545402842181578e74'
 BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
