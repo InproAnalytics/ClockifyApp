@@ -16,18 +16,6 @@ import locale
 import sys
 import re
 import os
-<<<<<<< HEAD
-import streamlit as st
-
-
-# auto-loads the .env file
-
-
-API_KEY      = st.secrets["API_KEY"]
-WORKSPACE_ID = '66052c545402842181578e74'
-BASE_URL     = "https://api.clockify.me/api/v1"
-HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
-=======
 from config import API_KEY, WORKSPACE_ID, BASE_URL
 
 
@@ -35,7 +23,7 @@ API_KEY = os.getenv("CLOCKIFY_API_KEY")
 WORKSPACE_ID = os.getenv("CLOCKIFY_WORKSPACE_ID")
 BASE_URL = os.getenv("CLOCKIFY_BASE_URL")
 HEADERS = {"X-Api-Key": API_KEY, "Content-Type": "application/json"}
->>>>>>> af603b6 (Refresh)
+
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "app_Flask" / "templates"
@@ -994,8 +982,3 @@ if __name__ == "__main__":
 
     # --- Start processing reports ---
     process_reports_loop(df_date, TEMPLATE_PATH, LOGO_PATH, CSS_PATH)
-<<<<<<< HEAD
-=======
-
-  
->>>>>>> af603b6 (Refresh)
