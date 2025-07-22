@@ -20,7 +20,7 @@ import os
 # auto-loads the .env file
 
 
-API_KEY      = 'NmYxYzcxZDItYTk2OS00MjljLTlhMzktYWE2ZWRmZTg0Njc5'
+API_KEY      = os.getenv("API_KEY")
 WORKSPACE_ID = '66052c545402842181578e74'
 BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
