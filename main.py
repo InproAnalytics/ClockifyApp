@@ -9,12 +9,14 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from babel.dates import format_date
+import streamlit as st
 import pandas as pd
 import requests
 import locale
 import sys
 import re
 import os
+<<<<<<< HEAD
 import streamlit as st
 
 
@@ -25,6 +27,15 @@ API_KEY      = st.secrets["API_KEY"]
 WORKSPACE_ID = '66052c545402842181578e74'
 BASE_URL     = "https://api.clockify.me/api/v1"
 HEADERS      = {'X-Api-Key': API_KEY, 'Content-Type': 'application/json'}
+=======
+from config import API_KEY, WORKSPACE_ID, BASE_URL
+
+
+API_KEY = os.getenv("CLOCKIFY_API_KEY")
+WORKSPACE_ID = os.getenv("CLOCKIFY_WORKSPACE_ID")
+BASE_URL = os.getenv("CLOCKIFY_BASE_URL")
+HEADERS = {"X-Api-Key": API_KEY, "Content-Type": "application/json"}
+>>>>>>> af603b6 (Refresh)
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "app_Flask" / "templates"
@@ -75,97 +86,132 @@ def to_iso_format(date_str: str, is_end=False) -> str:
     return dt.isoformat(timespec="seconds") + "Z"
 
 
-def fetch_all(endpoint: str, params: dict = None) -> list:
+def fetch_all(endpoint: str, base_url: str, headers: dict, params: dict = None):
     """
     Fetch all pages from Clockify API. Returns a flat list of JSON objects.
     Raises RequestException on network or HTTP errors.
     """
-    items = []
+    url = f"{base_url}{endpoint}"
+    all_items = []
     page = 1
-    session = requests.Session()
-    default_params = {"page-size": PAGE_SIZE, "hydrated": True}
-    
+
     while True:
-        query = {**default_params, "page": page}
-        if params:
-            query.update(params)
-        resp = session.get(f"{BASE_URL}{endpoint}",
-                           headers=HEADERS,
-                           params=query,
-                           timeout=10)
-        resp.raise_for_status()
-        batch = resp.json()
-        if not batch:
+        query = params or {}
+        query.update({"page": page})
+        response = requests.get(url, headers=headers, params=query)
+        response.raise_for_status()
+
+        items = response.json()
+        if not items:
             break
-        items.extend(batch)
+
+        all_items.extend(items)
         page += 1
 
-    return items
+    return all_items
 
 
-def get_entries_by_date(start_iso: str, end_iso: str) -> pd.DataFrame:
+def get_entries_by_date(start_iso: str,
+                        end_iso: str,
+                        api_key: str,
+                        workspace_id: str,
+                        base_url: str) -> pd.DataFrame:
     """
-    Return a DataFrame of all time entries between start_iso and end_iso,
-    including client_id and project_id for downstream logic.
+    Returns a DataFrame with all time entries between start_iso and end_iso, including:
+      - project_id, project_name
+      - client_id, client_name
+      - user_name, task_name, description
+
+    For reliability, fetches the full list of projects and clients from the API
+    and merges them by ID to avoid depending on fields inside the time entries.
     """
-    users = fetch_all(f"/workspaces/{WORKSPACE_ID}/users")
+    headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
+
+    # 0) Master lists of projects and clients
+    projects = fetch_all(f"/workspaces/{workspace_id}/projects", base_url, headers)
+    clients  = fetch_all(f"/workspaces/{workspace_id}/clients",  base_url, headers)
+    project_map = {p["id"]: p for p in projects}
+    client_map  = {c["id"]: c["name"] for c in clients}
+
+    # 1) List of workspace users
+    users = fetch_all(f"/workspaces/{workspace_id}/users", base_url, headers)
     if not users:
+        print("⚠️ Keine Benutzer im Workspace – gebe ein leeres DataFrame zurück.")
         return pd.DataFrame()
 
-    frames = []
+    all_frames = []
     for user in users:
-        # Fetch this user's time entries in the given date range
+        # 2) Retrieve all time entries for the user during the period
         entries = fetch_all(
-            f"/workspaces/{WORKSPACE_ID}/user/{user['id']}/time-entries",
+            f"/workspaces/{workspace_id}/user/{user['id']}/time-entries",
+            base_url,
+            headers,
             params={"start": start_iso, "end": end_iso}
         )
         if not entries:
             continue
 
-        # Normalize JSON into a flat DataFrame
         df = pd.json_normalize(entries, sep='.')
 
-        # Extract IDs for later use
+        # 3) Standard columns from time entries
         df['description'] = df.get('description', pd.NA).fillna('').astype(str)
-        df['client_id']  = df.get('project.clientId', pd.NA).fillna('').astype(str)
-        df['project_id'] = df.get('projectId',       pd.NA).fillna('').astype(str)
+        df['user_name']   = user.get('name', '')
 
-        # Add user, client, project and task names
-        df['user_name']    = user['name']
-        df['client_name']  = df.get('project.clientName', '').fillna('').astype(str)
-        df['project_name'] = df.get('project.name',       '').fillna('').astype(str)
-        df['task_name'] = df.get('task.name', pd.Series(dtype='object')).fillna('Allgemein').replace('', 'Allgemein').astype(str)
+        # 4) Map project/client using master lists
+        df['project_id'] = df.get('projectId', pd.NA).fillna('').astype(str)
+        df['project_name'] = df['project_id'].map(
+            lambda pid: project_map.get(pid, {}).get('name', '')
+        )
+        df['client_id'] = df['project_id'].map(
+            lambda pid: project_map.get(pid, {}).get('clientId', '')
+        )
+        df['client_name'] = df['client_id'].map(
+            lambda cid: client_map.get(cid, '')
+        )
 
+        # 5) Task name with default 'Allgemein'
+        if 'task.name' in df.columns:
+            df['task_name'] = (
+                df['task.name']
+                  .fillna('Allgemein')
+                  .replace('', 'Allgemein')
+                  .astype(str)
+            )
+        else:
+            df['task_name'] = pd.Series(['Allgemein'] * len(df), index=df.index)
 
-        # Format the start timestamp as DD.MM.YYYY
-        df['start'] = pd.to_datetime(df['timeInterval.start'], errors='coerce').dt.strftime('%d.%m.%Y')
-
-        # Calculate duration in hours as a float
+        # 6) Start date and duration
+        df['start'] = pd.to_datetime(df['timeInterval.start'], errors='coerce') \
+                        .dt.strftime('%d.%m.%Y')
         df['duration_hours'] = (
-            pd.to_datetime(df['timeInterval.end'])
-          - pd.to_datetime(df['timeInterval.start'])
-        ).dt.total_seconds() / 3600
+            pd.to_datetime(df['timeInterval.end'], errors='coerce')
+          - pd.to_datetime(df['timeInterval.start'], errors='coerce')
+        ).dt.total_seconds() / 3600.0
 
-        # Keep only the columns we need downstream
-        frames.append(df[[
-            'description',
-            'user_name',
-            'client_id',
-            'client_name',
-            'project_id',
-            'project_name',
-            'task_name',
-            'start',
-            'duration_hours'
-        ]])
+        # 7) Keep only the required columns
+        cols = [
+            'description', 'user_name',
+            'client_id', 'client_name',
+            'project_id', 'project_name',
+            'task_name', 'start', 'duration_hours'
+        ]
+        all_frames.append(df[cols])
 
-    # Combine all user frames into one DataFrame, or return empty if none
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    # 8) Concatenate and return
+    if not all_frames:
+        return pd.DataFrame(columns=[
+            'description', 'user_name',
+            'client_id', 'client_name',
+            'project_id', 'project_name',
+            'task_name', 'start', 'duration_hours'
+        ])
+
+    return pd.concat(all_frames, ignore_index=True)
 
 
 def build_client_name_map(clients: list[dict]) -> dict[str, list[str]]:
     """
-    Build a mapping from lowercase client name to list of client IDs.
+    Build a mapping from lowercase client names to lists of client IDs.
     Pure function: deterministic, no side effects.
     """
     mp: dict[str, list[str]] = defaultdict(list)
@@ -179,32 +225,33 @@ def select_client_id(name_map: dict[str, list[str]], choice: str) -> str:
     """
     Given a name_map and a lowercase choice string,
     return the single client_id or raise:
-      - KeyError       if choice not in name_map
-      - ValueError     if choice maps to multiple IDs
+      - KeyError   if the choice is not in name_map
+      - ValueError if the choice maps to multiple IDs
     Pure function.
     """
     if choice not in name_map:
-        raise KeyError(f"No such client: '{choice}'")
+        raise KeyError(f"Kein Client mit dem Namen: '{choice}'")
     ids = name_map[choice]
     if len(ids) > 1:
-        raise ValueError(f"Ambiguous client '{choice}': {ids}")
+        raise ValueError(f"Mehrdeutiger Client '{choice}': {ids}")
     return ids[0]
 
 
 def filter_by_client(df: pd.DataFrame, client_name: str) -> pd.DataFrame:
-    """Pure: filter DataFrame by client_name (case-insensitive)."""
+    """
+    Pure: filters the DataFrame by client_name (case-insensitive).
+    """
     key = client_name.lower()
     return df[df['client_name'].str.lower() == key].copy()
 
 
 def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Interactive selection menu for choosing a client from a DataFrame.
-    Shows only clients actually present in the given period.
-    If the client name is ambiguous (multiple IDs), prompts user to pick one.
+    Interactive menu for selecting a client from a DataFrame.
+    Shows only clients present in the given period.
+    If the client name is ambiguous (multiple IDs), prompts the user to pick one.
     """
-
-    # 0️⃣ Clean client_name column
+    # Create a copy and clean the client_name column
     df = df.copy()
     df['client_name'] = (
         df['client_name']
@@ -214,7 +261,7 @@ def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
     )
     df = df[df['client_name'] != ""]
 
-    # 1️⃣ Build client map only from available entries in the DataFrame
+    # Build client records from available entries
     client_records = (
         df[['client_id', 'client_name']]
         .drop_duplicates()
@@ -225,23 +272,22 @@ def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
         print("❌ Keine Clients in diesem Zeitraum vorhanden.")
         return df.iloc[0:0].copy()
 
-    # 2️⃣ Build name_map: lowercase client_name -> list of IDs
-    from collections import defaultdict
-    name_map = defaultdict(list)
+    # Map lowercase client_name to list of IDs
+    name_map: dict[str, list[str]] = defaultdict(list)
     for _, row in client_records.iterrows():
         name_map[row['client_name'].lower()].append(row['client_id'])
 
     available_names = sorted(name_map.keys())
 
-    # 3️⃣ Main selection loop
+    # Main selection loop
     while True:
         print("\nVerfügbare Clients:")
         for i, client in enumerate(available_names, 1):
             print(f"  {i}. {client}")
 
         print("\nAuswahlmöglichkeiten:")
-        print("  - Clientname/Nummer = genau ein Client auswählen")
-        print("    Beispiel: 1 oder 2  oder  Neuroth")
+        print("  - Nummer oder Name = genau einen Client auswählen")
+        print("    Beispiel: 1, 2 oder Neuroth")
         print("  - 'x' = Beenden")
 
         choice = input("\nDeine Auswahl: ").strip()
@@ -250,28 +296,27 @@ def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
             print("Programm wird beendet.")
             sys.exit(0)
 
-        # Number = selection by index
+        # Selection by index
         if choice.isdigit():
             idx = int(choice)
             if 1 <= idx <= len(available_names):
                 selected_name = available_names[idx - 1]
                 print(f"✅ Ausgewählter Client (Nummer): {selected_name}")
             else:
-                print("❌ Fehler: Ungültige Nummer. Bitte erneut versuchen.")
+                print("❌ Ungültige Nummer. Bitte erneut versuchen.")
                 continue
         else:
             selected_name = choice.lower()
             if selected_name not in name_map:
-                print("❌ Fehler: Client nicht gefunden. Bitte erneut versuchen.")
+                print("❌ Client nicht gefunden. Bitte erneut versuchen.")
                 continue
             print(f"✅ Ausgewählter Client (Name): {selected_name}")
 
-        # 4️⃣ Check IDs for this name
+        # Resolve client IDs
         client_ids = name_map[selected_name]
         if len(client_ids) == 1:
             client_id = client_ids[0]
         else:
-            # Multiple IDs found -> ask user to choose
             print(f"\n⚠️ Mehrere IDs für '{selected_name}' gefunden:")
             for i, cid in enumerate(client_ids, 1):
                 print(f"  {i}. ID = {cid}")
@@ -288,7 +333,7 @@ def filter_by_client_inter(df: pd.DataFrame) -> pd.DataFrame:
                         break
                 print("❌ Ungültige Eingabe. Bitte erneut versuchen.")
 
-        # 5️⃣ Filter DataFrame for this client
+        # Filter entries for the selected client
         df_client = df[
             (df['client_name'].str.lower() == selected_name) &
             (df['client_id'] == client_id)
@@ -379,12 +424,13 @@ def filter_by_project_inter(projects_in_client: list[str]) -> list[str]:
         return matched
 
 
-def get_data(client: str, project: str, start: str, end: str) -> pd.DataFrame:
+def get_data(client: str, project: str, start: str, end: str,
+             api_key: str, workspace_id: str, base_url: str) -> pd.DataFrame:
     """Fetch and filter time entries based on client, project, and date range."""
     start_iso = to_iso_format(start, is_end=False)
     end_iso   = to_iso_format(end,   is_end=True)
 
-    df_date   = get_entries_by_date(start_iso, end_iso)
+    df_date = get_entries_by_date(start_iso, end_iso, api_key, workspace_id, base_url)
     print(df_date[['user_name','start','project_id']].head())
  
     df_client = filter_by_client(df_date, client)
@@ -422,11 +468,11 @@ def generate_report_pdf(
             name='Company',
             fontSize=14,
             alignment=TA_LEFT,
-            wordWrap='None',       # отключаем переносы (можно 'None' или 'CJK' для блокировки)
-            splitLongWords=False, # запрещаем разрезать слова
+            wordWrap='None',       # disable wrapping (use 'None' or 'CJK' to prevent wrapping)
+            splitLongWords=False,   # prevent splitting words
             allowWidows=0,
             allowOrphans=0,
-            leading=16                # высота строки (чтобы строки не слипались)       
+            leading=16               # line height (to avoid overlapping lines)
         )
     ))  
 
@@ -445,46 +491,44 @@ def generate_report_pdf(
     header_table = Table(header_table_data, colWidths=[120*mm, None])
     header_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (0,0), (0,0), 'LEFT'),   # Название — слева
-        ('ALIGN', (1,0), (1,0), 'RIGHT'),  # Логотип — справа
+        ('ALIGN', (0,0), (0,0), 'LEFT'),   # Title - left aligned
+        ('ALIGN', (1,0), (1,0), 'RIGHT'),  # Logo - right aligned
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
         ('TOPPADDING', (0,0), (-1,-1), 0),
     ]))
     elements.append(header_table)
-    elements.append(Spacer(1, 24))
+    elements.append(Spacer(1, 24))  # spacer after header
 
     # TITLE
     title_style = ParagraphStyle(
         name='Title',
         fontSize=12,
-        leading=14,         # высота строки
-        alignment=TA_LEFT,  # выравнивание слева
-        spaceAfter=14,      # отступ снизу после заголовка
-        fontName='Helvetica-bold'  # жирный шрифт
+        leading=14,         # line height
+        alignment=TA_LEFT,  # left alignment
+        spaceAfter=14,      # space below title
+        fontName='Helvetica-bold'  # bold font
     )
     title_text = f"Stundenaufstellung {months_range}"
     title_para = Paragraph(title_text, title_style)
-    # Оборачиваем параграф в таблицу для дополнительного управления выравниванием и стилями
-    title_table = Table([[title_para]], colWidths=[180*mm])  # ширина таблицы по желанию
+    # Wrap the paragraph in a table for additional alignment and styling control
+    title_table = Table([[title_para]], colWidths=[180*mm])  # table width as desired
     title_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-        ('ALIGN', (2,1), (-1,-2), 'CENTER'),
+        # remove GRID or set a thin gray line if needed
+        # ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
         ('TOPPADDING', (0, 0), (-1, -1), 0),
-        # Убрать GRID или поставить тонкую серую линию, если нужно
-        # ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
     ]))
-    # Добавляем в список элементов для сборки PDF
     elements.append(title_table)
-    elements.append(Spacer(1, 24))  # Отступ после заголовка
+    elements.append(Spacer(1, 24))  # spacer after title
 
     # TABLE 
     cell_style = ParagraphStyle(
         name='BodyTextLeft',
         parent=styles['BodyText'],
         alignment=TA_LEFT,
-        wordWrap='CJK', # перенос по словам
+        wordWrap='CJK',  # wrap by words
         leading=12,
     )
     table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
@@ -500,7 +544,7 @@ def generate_report_pdf(
     tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
 
     style = TableStyle([
-        # Шапка — жирный, все колонки по центру вертикально
+        # Header row: bold font, all columns vertically centered
         ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('VALIGN', (0,0), (-1,0), 'MIDDLE'),
         ('BACKGROUND', (0,0), (-1,0), colors.white),
@@ -509,28 +553,26 @@ def generate_report_pdf(
         ('ALIGN', (0,0), (0,0), 'LEFT'),
         ('VALIGN', (0,0), (0,0), 'MIDDLE'),
 
-        # В шапке колонки 2, 3 и 4 по центру горизонтально
+        # In header, columns 2-4 centered horizontally
         ('ALIGN', (1,0), (3,0), 'CENTER'),
         ('VALIGN', (1,0), (3,0), 'MIDDLE'),
 
-        # Данные: 1 и 2 колонка — выравнивание слева сверху
-        ('ALIGN', (0,1), (0,-2), 'LEFT'),  # Description
-        ('VALIGN', (0,1), (0,-2), 'TOP'),
-        ('ALIGN', (1,1), (1,-2), 'LEFT'),  # Aufgabe
-        ('VALIGN', (1,1), (1,-2), 'MIDDLE'),
+        # Data rows: columns 1 and 2 - left aligned, top
+        ('ALIGN', (0,1), (1,-2), 'LEFT'),
+        ('VALIGN', (0,1), (1,-2), 'TOP'),
 
-        # Данные: 3 и 4 колонка — по центру горизонтально и вертикально
+        # Data rows: columns 3 and 4 - centered horizontally and vertically
         ('ALIGN', (2,1), (3,-2), 'CENTER'),
         ('VALIGN', (2,1), (3,-2), 'MIDDLE'),
 
-        # Итоговая строка — жирная и светлый фон, с отступами и выравниванием
+        # Total row: bold font, light background, with padding and alignment
         ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
         ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eaeaea")),
         ('TOPPADDING', (0,-1), (-1,-1), 6),
         ('BOTTOMPADDING', (0,-1), (-1,-1), 6),
         ('ALIGN', (3,-1), (3,-1), 'CENTER'),
 
-        # Сетка
+        # Grid
         ('GRID', (0,0), (-1,-1), 0.001, colors.HexColor("#555555")),
     ])
 
@@ -792,8 +834,9 @@ def choose_period() -> tuple[str, str]:
             print(f"❌ Invalid date: {e}. Please try again.\n")
 
 
-def load_entries_for_period(start_iso: str, end_iso: str) -> pd.DataFrame:
-    df_date = get_entries_by_date(start_iso, end_iso)
+def load_entries_for_period(start_iso: str, end_iso: str,
+                            api_key: str, workspace_id: str, base_url: str) -> pd.DataFrame:
+    df_date = get_entries_by_date(start_iso, end_iso, api_key, workspace_id, base_url)
     return df_date
 
 
@@ -841,31 +884,36 @@ def build_pdf_filename(
     return f"Stundenauflistung_{client_name}{project_part}_{period_part}.pdf"
 
 
-def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: Path, css_file: Path):
+def process_reports_loop(df_date: pd.DataFrame,
+                         template_path: Path,
+                         logo_file: Path,
+                         css_file: Path):
     while True:
-        # --- Select client ---
-        df_client = filter_by_client_inter(df_date)
+        # Если есть клиенты — выбираем их, иначе сразу к проектам
+        unique_clients = df_date['client_name'].dropna().unique().tolist()
+        if unique_clients:
+            df_client = filter_by_client_inter(df_date)
+            if df_client.empty:
+                print("❌ Keine Clients gefunden. Programm wird beendet.")
+                sys.exit(0)
+        else:
+            print("⚠️ Keine Clients gefunden — weiter mit Projektauswahl.")
+            df_client = df_date.copy()
 
-        # --- Filter available projects for that client ---
-        projects_in_client = sorted(
-            df_client.get('project_name', df_client.get('project.name', pd.Series()))
-            .dropna().unique().tolist()
-        )
+        # Список проектов из полученного df_client
+        projects = sorted(df_client['project_name'].dropna().unique().tolist())
+        if not projects:
+            print("❌ Keine Projekte gefunden. Programm wird beendet.")
+            sys.exit(0)
 
-        if not projects_in_client:
-            print("❌ Keine Projekte für diesen Client gefunden. Bitte anderen Client wählen.\n")
-            continue
-
-        # --- Project selection ---
-        selected_projects = filter_by_project_inter(projects_in_client)
-
-        # --- Filter by selected projects ---
+        # Выбираем одну или несколько
+        selected_projects = filter_by_project_inter(projects)
         df_proj = df_client[df_client['project_name'].isin(selected_projects)].copy()
         if df_proj.empty:
-            print(f"❌ Keine Einträge für die Auswahl {selected_projects}. Bitte erneut versuchen.\n")
+            print(f"❌ Keine Einträge für {selected_projects}. Bitte erneut.")
             continue
 
-        # --- Get client name ---
+       # --- Get client name ---
         client_name = df_proj['client_name'].iloc[0]
 
         # --- Create printable project name ---
@@ -926,6 +974,7 @@ def process_reports_loop(df_date: pd.DataFrame, template_path: Path, logo_file: 
             break
 
 
+
 if __name__ == "__main__":
 
     if not LOGO_PATH.exists():
@@ -937,7 +986,7 @@ if __name__ == "__main__":
 
     # --- Select time period and load data ---
     start_iso, end_iso = choose_period()
-    df_date = load_entries_for_period(start_iso, end_iso)
+    df_date = get_entries_by_date(start_iso, end_iso, API_KEY, WORKSPACE_ID, BASE_URL)
 
     if df_date.empty:
         print("⚠️ Keine Daten im gewählten Zeitraum!")
@@ -945,3 +994,8 @@ if __name__ == "__main__":
 
     # --- Start processing reports ---
     process_reports_loop(df_date, TEMPLATE_PATH, LOGO_PATH, CSS_PATH)
+<<<<<<< HEAD
+=======
+
+  
+>>>>>>> af603b6 (Refresh)
