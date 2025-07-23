@@ -3,12 +3,8 @@ from datetime import date
 import calendar
 import base64
 import pandas as pd
-import requests
-import toml
 import os
-import re
 from main import LOGO_PATH, COMPANY_NAME
-from rotate_secrets import hash_password, generate_password
 
 # ====== Check environment ======
 st.set_page_config(page_title="Clockify Berichtgenerator", layout="centered")
@@ -30,7 +26,7 @@ if not st.session_state["authenticated"]:
 
     if st.button("Anmelden"):
         auth_users = st.secrets.get("auth", {})
-        if username in auth_users and auth_users[username]["password_hash"] == hash_password(password):
+        if username in auth_users and auth_users[username]["password"] == password:
             user_secrets = st.secrets.get("users", {}).get(username)
             if user_secrets:
                 st.session_state.update({
@@ -59,48 +55,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
-# ====== Passwort ändern ======
-if st.session_state.get("authenticated") and not st.session_state.get("password_changed"):
-    with st.expander("🔄 Passwort ändern", expanded=False):
-        mode = st.radio(
-            "Auto-generiertes oder eigenes Passwort:",
-            ("Auto-generiert", "Eigenes Passwort"),
-            index=0
-        )
-        if mode == "Auto-generiert":
-            if st.button("Passwort generieren", key="gen_pw"):
-                st.session_state["candidate_password"] = generate_password(12)
-        else:
-            manual = st.text_input("Eigenes Passwort eingeben", type="password", key="manual_pw")
-            if st.button("Passwort übernehmen", key="choose_pw"):
-                st.session_state["candidate_password"] = manual
-
-        cand = st.session_state.get("candidate_password")
-        if cand:
-            st.text_input(
-                "🔑 Dein neues Passwort:",
-                value=cand,
-                disabled=True,
-                key="new_pw_display"
-            )
-            if len(cand) < 12 or not re.search(r"[^A-Za-z0-9]", cand):
-                st.error("Passwort muss mindestens 12 Zeichen und ein Sonderzeichen enthalten.")
-                del st.session_state["candidate_password"]
-            else:
-                st.success("Passwort erfüllt die Anforderungen.")
-                if st.button("Änderung bestätigen", key="confirm_pw"):
-                    pw_hash = hash_password(cand)
-                    data = toml.load(".streamlit/secrets.toml")
-                    data.setdefault("auth", {})[st.session_state["username"]] = {"password_hash": pw_hash}
-                    with open(".streamlit/secrets.toml", "w") as f:
-                        toml.dump(data, f)
-                    st.success("Passwort erfolgreich geändert.")
-                    del st.session_state["candidate_password"]
-                    st.session_state["password_changed"] = True  
-
-if st.session_state.get("password_changed"):
-    st.success("Dein Passwort wurde gespeichert! Das Fenster ist jetzt ausgeblendet.")
 
 # ====== API configuration ======
 if st.session_state.get("authenticated"):

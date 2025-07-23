@@ -9,7 +9,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from babel.dates import format_date
-import streamlit as st
 import pandas as pd
 import requests
 import locale
@@ -196,7 +195,7 @@ def get_entries_by_date(start_iso: str,
 
     result = pd.concat(all_frames, ignore_index=True)
 
-    # Удалить строки без client_name или project_name
+    # Remove rows without client_name or project_name
     result = result.dropna(subset=["client_name", "project_name"])
     result = result[
         result["client_name"].str.strip().astype(bool) &
@@ -885,7 +884,7 @@ def process_reports_loop(df_date: pd.DataFrame,
                          logo_file: Path,
                          css_file: Path):
     while True:
-        # Если есть клиенты — выбираем их, иначе сразу к проектам
+        # If clients exist – select them, otherwise go to projects
         unique_clients = df_date['client_name'].dropna().unique().tolist()
         if unique_clients:
             df_client = filter_by_client_inter(df_date)
@@ -896,13 +895,13 @@ def process_reports_loop(df_date: pd.DataFrame,
             print("⚠️ Keine Clients gefunden — weiter mit Projektauswahl.")
             df_client = df_date.copy()
 
-        # Список проектов из полученного df_client
+        # Extract list of projects from df_client
         projects = sorted(df_client['project_name'].dropna().unique().tolist())
         if not projects:
             print("❌ Keine Projekte gefunden. Programm wird beendet.")
             sys.exit(0)
 
-        # Выбираем одну или несколько
+        # Select one or more
         selected_projects = filter_by_project_inter(projects)
         df_proj = df_client[df_client['project_name'].isin(selected_projects)].copy()
         if df_proj.empty:
