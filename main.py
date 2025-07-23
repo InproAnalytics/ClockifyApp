@@ -194,7 +194,15 @@ def get_entries_by_date(start_iso: str,
             'task_name', 'start', 'duration_hours'
         ])
 
-    return pd.concat(all_frames, ignore_index=True)
+    result = pd.concat(all_frames, ignore_index=True)
+
+    # Удалить строки без client_name или project_name
+    result = result.dropna(subset=["client_name", "project_name"])
+    result = result[
+        result["client_name"].str.strip().astype(bool) &
+        result["project_name"].str.strip().astype(bool)
+    ]
+    return result
 
 
 def build_client_name_map(clients: list[dict]) -> dict[str, list[str]]:
