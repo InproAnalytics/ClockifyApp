@@ -210,19 +210,25 @@ if st.session_state.data_loaded and not st.session_state.final_confirmed:
     clients = sorted(df_date['client_name'].dropna().unique())
     clients_with_empty = ["Bitte wählen..."] + clients
 
+    # Если сброшено, то selectbox всегда будет пустой!
     if "client_selectbox" not in st.session_state:
         st.session_state["client_selectbox"] = "Bitte wählen..."
 
-    client_selected = st.selectbox(
+    client = st.selectbox(
         "Kunde auswählen:",
         options=clients_with_empty,
-        key="client_selectbox"  # ✅ FIX: используем только этот ключ
+        key="client_selectbox"
     )
-    if client_selected == "Bitte wählen...":
+
+    # Не продолжаем, если не выбран клиент
+    if client == "Bitte wählen...":
         st.stop()
+    
+    # Далее используем только client
+    # ...
 
     # ✅ FIX: убрано st.session_state["client_selected"]
-    client = client_selected
+    client_selected = client
     df_client = df_date[df_date["client_name"].str.strip().str.lower() == client.strip().lower()]
 
     # Projects
@@ -269,11 +275,13 @@ if st.session_state.data_loaded and not st.session_state.final_confirmed:
             st.session_state.final_confirmed = True
 
 # ====== Data editor and PDF generation ======
-if st.session_state.final_confirmed:
-    st.subheader("Überprüfen und Bearbeiten der Tabelle")
+if st.session_state.final_confirmed and \
+   st.session_state.get("client_selectbox", None) and \
+   st.session_state["client_selectbox"] != "Bitte wählen...":
+
+    client = st.session_state["client_selectbox"]
 
     # Filter the table for the current client and projects
-    client = st.session_state["client_selectbox"]
     df_selected = st.session_state.df_date[
         (st.session_state.df_date['client_name'].str.strip().str.lower() == client.strip().lower()) &
         (st.session_state.df_date['project_name'].isin(st.session_state.selected_projects))
