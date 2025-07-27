@@ -15,6 +15,7 @@ is_cloud = (
 )
 
 # ====== Initialize authentication state ======
+
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -42,6 +43,7 @@ if not st.session_state["authenticated"]:
         else:
             st.error("❌ Ungültige Anmeldedaten.")
     st.stop()
+
 # ====== Hide Streamlit UI elements ======
 st.markdown(
     """
@@ -118,16 +120,11 @@ st.subheader("Zeitraum auswählen")
 
 today = date.today()
 first_day_of_month = today.replace(day=1)
-last_day_of_month = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+last_day_of_month  = today.replace(day=calendar.monthrange(today.year, today.month)[1])
 
-import streamlit as st
-from datetime import date
-
-# === Dynamischer Schlüssel für date_input ===
 if "date_input_key" not in st.session_state:
     st.session_state["date_input_key"] = "date_input_0"
 
-# === Datumsauswahl ===
 date_range = st.date_input(
     "Wähle den Zeitraum:",
     value=(first_day_of_month, last_day_of_month),
@@ -135,7 +132,6 @@ date_range = st.date_input(
     key=st.session_state["date_input_key"]
 )
 
-# === Validierung des Zeitraums ===
 if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
     start_date, end_date = date_range
 else:
@@ -146,71 +142,52 @@ if start_date > end_date:
     st.error("❌ Enddatum darf nicht vor dem Startdatum liegen.")
     st.stop()
 
-# === Автосброс подтверждённого периода при изменении дат ===
-temp_period = {"start": start_date, "end": end_date}
-confirmed = st.session_state.get("confirmed_period")
+if "confirmed_period" not in st.session_state:
+    st.session_state["confirmed_period"] = False
 
-if confirmed and (confirmed["start"] != start_date or confirmed["end"] != end_date):
-    st.session_state["confirmed_period"] = None
-    st.session_state["data_loaded"] = False
+if not st.session_state["confirmed_period"]:
+    if st.button(
+        f"Zeitraum bestätigen",
+        key="btn_confirm_period"
+    ):
+        st.session_state["confirmed_period"] = True
+        st.rerun() 
+    st.stop()
 
-# === Bestätigungsbutton ===
-if st.button("Zeitraum bestätigen"):
-    st.session_state["confirmed_period"] = {"start": start_date, "end": end_date}
-    st.session_state["data_loaded"] = False  # Trigger Neuladen bei Bestätigung
+# ====== Daten nur laden, wenn Zeitraum bestätigt ======
+if st.session_state["confirmed_period"] and not st.session_state.get("data_loaded", False):
+    from config import API_KEY, WORKSPACE_ID, BASE_URL
+    from main   import to_iso_format, get_entries_by_date
 
-# === Daten nur laden, wenn bestätigt ===
-confirmed = st.session_state.get("confirmed_period")
+    with st.spinner("Lade Daten von Clockify..."):
+        start_iso = to_iso_format(start_date.strftime("%d-%m-%Y"), is_end=False)
+        end_iso   = to_iso_format(end_date.strftime("%d-%m-%Y"), is_end=True)
+        df_date   = get_entries_by_date(
+            start_iso, end_iso,
+            API_KEY, WORKSPACE_ID, BASE_URL
+        )
 
-if confirmed:
-    start_date = confirmed["start"]
-    end_date   = confirmed["end"]
+    if df_date.empty or 'client_name' not in df_date.columns:
+        st.warning("Keine Daten im gewählten Zeitraum.")
+        st.stop()
 
-    prev = st.session_state.get("prev_period", {})
-    if not isinstance(prev, dict):
-        prev = {}
+    st.session_state["df_date"]   = df_date
+    st.session_state["data_loaded"] = True
+    st.success(f"{len(df_date)} Einträge geladen.")
 
-    # Wenn der bestätigte Zeitraum anders ist -> Reset
-    if (prev.get("start"), prev.get("end")) != (start_date, end_date):
-        st.session_state["data_loaded"] = False
-        st.session_state["df_date"]      = None
-        st.session_state["client_selected"]   = None
-        st.session_state["selected_projects"] = []
-        st.session_state["final_confirmed"]   = False
-        st.session_state["pdf_bytes"]         = None
-        st.session_state["prev_period"]       = {"start": start_date, "end": end_date}
-        st.session_state["editor_table"] = None
-        st.session_state["editable_table"] = None
-
-    # Daten laden, wenn noch nicht geschehen
-    if not st.session_state.get("data_loaded", False):
-        from config import API_KEY, WORKSPACE_ID, BASE_URL
-        from main import to_iso_format, get_entries_by_date
-        with st.spinner("Lade Daten von Clockify..."):
-            start_iso = to_iso_format(start_date.strftime("%d-%m-%Y"), is_end=False)
-            end_iso   = to_iso_format(end_date.strftime("%d-%m-%Y"), is_end=True)
-            df_date   = get_entries_by_date(start_iso, end_iso, API_KEY, WORKSPACE_ID, BASE_URL)
-        if df_date.empty or 'client_name' not in df_date.columns:
-            st.warning("Keine Daten im gewählten Zeitraum.")
-            st.stop()
-        else:
-            st.session_state["df_date"]     = df_date
-            st.session_state["data_loaded"] = True
 
 # === Wenn Daten geladen ===
 if st.session_state.get("data_loaded", False):
     df = st.session_state["df_date"]
-    st.write("Geladene Einträge insgesamt:", len(st.session_state["df_date"]))
 
 # ====== Select client and projects ======
-if st.session_state.data_loaded and not st.session_state.final_confirmed:
+if st.session_state.get("data_loaded", False) and not st.session_state.get("final_confirmed", False):
     st.subheader("Kunden auswählen")
 
-    df_date = st.session_state.df_date
+    df_date = st.session_state["df_date"]
     clients = sorted(df_date['client_name'].dropna().unique())
     clients_with_empty = ["Bitte wählen..."] + clients
 
-    # Если сброшено, то selectbox всегда будет пустой!
     if "client_selectbox" not in st.session_state:
         st.session_state["client_selectbox"] = "Bitte wählen..."
 
@@ -219,73 +196,65 @@ if st.session_state.data_loaded and not st.session_state.final_confirmed:
         options=clients_with_empty,
         key="client_selectbox"
     )
-
-    # Не продолжаем, если не выбран клиент
     if client == "Bitte wählen...":
         st.stop()
-    
-    # Далее используем только client
-    # ...
 
-    # ✅ FIX: убрано st.session_state["client_selected"]
-    client_selected = client
-    df_client = df_date[df_date["client_name"].str.strip().str.lower() == client.strip().lower()]
+    st.session_state["client_selected"] = client
 
-    # Projects
-    df_client = df_date[df_date['client_name'] == client_selected]
+    df_client = df_date[
+        df_date["client_name"]
+            .str.strip()
+            .str.lower() == client.strip().lower()
+    ]
     projects = sorted(df_client['project_name'].dropna().unique())
-    if "last_client" not in st.session_state or st.session_state["last_client"] != client_selected:
-        st.session_state["selected_projects"] = projects if len(projects) == 1 else []
-        st.session_state["editor_table"] = None
-        st.session_state["editable_table"] = None
-        st.session_state["last_client"] = client_selected  # сохраняем текущий
 
-    valid_selected_projects = [p for p in st.session_state.selected_projects if p in projects]
-    st.session_state.selected_projects = valid_selected_projects
+    if st.session_state.get("last_client") != client:
+        st.session_state["selected_projects"] = projects if len(projects) == 1 else []
+        st.session_state["editor_table"]    = None
+        st.session_state["editable_table"]  = None
+        st.session_state["last_client"]     = client
+
+    valid = [p for p in st.session_state["selected_projects"] if p in projects]
+    st.session_state["selected_projects"] = valid
 
     if not projects:
         st.warning("Keine Projekte vorhanden.")
         st.stop()
 
-    valid_selected_projects = [p for p in st.session_state.selected_projects if p in projects]
-    st.session_state.selected_projects = valid_selected_projects
-
     if len(projects) == 1:
-        selected_projects = projects
-        st.info(f"Nur ein Projekt verfügbar: **{projects[0]}** wird automatisch ausgewählt.")
+        st.session_state["selected_projects"] = projects
+        st.info(f"Nur ein Projekt verfügbar: **{projects[0]}** automatisch ausgewählt.")
     else:
-        selected_projects = st.multiselect(
+        sel = st.multiselect(
             "Verfügbare Projekte:",
             options=projects,
-            default=valid_selected_projects
+            default=st.session_state["selected_projects"],
+            key="multiselect_projects"
         )
-        if st.button("Alle Projekte auswählen"):
-            selected_projects = projects
+        if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
+            sel = projects
+        st.session_state["selected_projects"] = sel
 
-    st.session_state.selected_projects = selected_projects
-
-    # Overview
-    if selected_projects and not st.session_state.final_confirmed:
+    if st.session_state["selected_projects"]:
         st.subheader("Überblick")
         st.success(
-            f"Zeitraum: {start_date.strftime('%d.%m.%Y')} bis {end_date.strftime('%d.%m.%Y')}\n\n"
-            f"Kunde: {client_selected}\n\nProjekte: {', '.join(selected_projects)}"
+            f"Zeitraum: {start_date:%d.%m.%Y} – {end_date:%d.%m.%Y}\n\n"
+            f"Kunde: {client}\n\n"
+            f"Projekte: {', '.join(st.session_state['selected_projects'])}"
         )
-        if st.button("Auswahl bestätigen"):
-            st.session_state.final_confirmed = True
+        if st.button("Auswahl bestätigen", key="btn_confirm_client"):
+            st.session_state["final_confirmed"] = True
+
 
 # ====== Data editor and PDF generation ======
-if st.session_state.final_confirmed and \
-   st.session_state.get("client_selectbox", None) and \
-   st.session_state["client_selectbox"] != "Bitte wählen...":
-
-    client = st.session_state["client_selectbox"]
+if st.session_state.get("final_confirmed", False):
+    st.subheader("Überprüfen und Bearbeiten der Tabelle")
 
     # Filter the table for the current client and projects
     df_selected = st.session_state.df_date[
-        (st.session_state.df_date['client_name'].str.strip().str.lower() == client.strip().lower()) &
+        (st.session_state.df_date['client_name'] == st.session_state.client_selected) &
         (st.session_state.df_date['project_name'].isin(st.session_state.selected_projects))
-    ].sort_values(by='start', key=lambda x: pd.to_datetime(x, dayfirst=True))  # ✅ FIX: client_selectbox
+    ].sort_values(by='start', key=lambda x: pd.to_datetime(x, dayfirst=True))
 
     if df_selected.empty:
         st.warning("Keine Einträge gefunden.")
@@ -348,8 +317,8 @@ if st.session_state.final_confirmed and \
     first_date = pd.to_datetime(table_for_pdf["start"], dayfirst=True).min()
     last_date = pd.to_datetime(table_for_pdf["start"], dayfirst=True).max()
     pdf_filename = build_pdf_filename(
-        st.session_state["client_selectbox"],  # ✅ FIX
-        st.session_state["selected_projects"],
+        st.session_state.client_selected,
+        st.session_state.selected_projects,
         first_date,
         last_date
     )
@@ -362,7 +331,7 @@ if st.session_state.final_confirmed and \
     )
 
 # ====== Navigation ======
-if st.session_state.get("pdf_bytes"): 
+if st.session_state.get("pdf_bytes"):
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Neuer Zeitraum"):
@@ -375,24 +344,21 @@ if st.session_state.get("pdf_bytes"):
                 "selected_projects", "final_confirmed",
                 "pdf_bytes", "prev_period",
                 "editor_table", "editable_table",
-                "client_selectbox"  # ✅ теперь точно сбросится до отрисовки
+                "client_selectbox" 
             ]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
-
     with col2:
         if st.button("Weitere Kunden"):
             for key in [
-                "client_selectbox",  # ✅ гарантированно сбрасывается
-                "selected_projects",
-                "final_confirmed", "pdf_bytes",
+                "data_loaded", "df_date", "client_selected", "selected_projects",
+                "final_confirmed", "pdf_bytes", "prev_period",
                 "editor_table", "editable_table"
             ]:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
-
     with col3:
         if st.button("Beenden"):
             for key in list(st.session_state.keys()):
