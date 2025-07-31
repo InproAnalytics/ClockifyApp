@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import date
 import calendar
 import base64
+import locale
 import pandas as pd
 import os
 from main import LOGO_PATH, COMPANY_NAME
@@ -14,10 +15,18 @@ is_cloud = (
     "X-Amzn-Trace-Id" in os.environ
 )
 
+try:
+    locale.setlocale(locale.LC_TIME, 'de_DE.UTF-8')
+except locale.Error:
+    st.warning("⚠️ Deutsche Sprachumgebung nicht verfügbar – Monatsnamen werden auf Englisch angezeigt.")
+
+
 # ====== Initialize authentication state ======
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
+if "selected_all_projects" not in st.session_state:
+    st.session_state["selected_all_projects"] = False
 
 # ====== Login form ======
 if not st.session_state["authenticated"]:
@@ -208,6 +217,9 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
     ]
     projects = sorted(df_client['project_name'].dropna().unique())
 
+    if "selected_all_projects" not in st.session_state:
+        st.session_state["selected_all_projects"] = False
+
     if st.session_state.get("last_client") != client:
         st.session_state["selected_projects"] = projects if len(projects) == 1 else []
         st.session_state["editor_table"]    = None
@@ -223,6 +235,7 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
 
     if len(projects) == 1:
         st.session_state["selected_projects"] = projects
+        st.session_state["selected_all_projects"] = True
         st.info(f"Nur ein Projekt verfügbar: **{projects[0]}** automatisch ausgewählt.")
     else:
         sel = st.multiselect(
@@ -232,8 +245,12 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
             key="multiselect_projects"
         )
         if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
-            sel = projects
-        st.session_state["selected_projects"] = sel
+            st.session_state["selected_projects"] = projects
+            st.session_state["selected_all_projects"] = True
+        else:
+            if sel != projects:
+                st.session_state["selected_all_projects"] = False
+            st.session_state["selected_projects"] = sel
 
     if st.session_state["selected_projects"]:
         st.subheader("Überblick")
@@ -298,6 +315,22 @@ if st.session_state.get("final_confirmed", False):
 
     # PDF Download section
     st.subheader("PDF-Download")
+
+    # Prepare filename using actual dates from table — ВСЕГДА
+    start_vals = pd.to_datetime(table_for_pdf["start"], format="%d.%m.%Y", errors="coerce")
+    first_date = start_vals.min()
+    last_date = start_vals.max()
+
+    pdf_filename = build_pdf_filename(
+        client_name=st.session_state.client_selected,
+        selected_projects=st.session_state.selected_projects,
+        first_date=first_date,
+        last_date=last_date,
+        selected_all_projects=st.session_state.get("selected_all_projects", False),
+        table_for_pdf=table_for_pdf
+    )
+
+    # Генерация PDF, если ещё не создан
     if not st.session_state.get("pdf_bytes"):
         months_range = get_months_range_string(table_for_pdf)
         total_hours = table_for_pdf['duration_hours'].sum()
@@ -313,22 +346,14 @@ if st.session_state.get("final_confirmed", False):
             total_hours=total_hours
         )
 
-    # Prepare filename using dates in table
-    first_date = pd.to_datetime(table_for_pdf["start"], dayfirst=True).min()
-    last_date = pd.to_datetime(table_for_pdf["start"], dayfirst=True).max()
-    pdf_filename = build_pdf_filename(
-        st.session_state.client_selected,
-        st.session_state.selected_projects,
-        first_date,
-        last_date
-    )
-
+    # Кнопка загрузки
     st.download_button(
         label="📥 PDF herunterladen",
         data=st.session_state["pdf_bytes"],
         file_name=pdf_filename,
         mime="application/pdf"
     )
+
 
 # ====== Navigation ======
 if st.session_state.get("pdf_bytes"):

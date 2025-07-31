@@ -15,6 +15,7 @@ import locale
 import sys
 import re
 import os
+from datetime import timedelta
 from config import API_KEY, WORKSPACE_ID, BASE_URL
 
 
@@ -557,7 +558,6 @@ def generate_report_pdf(
         ('VALIGN', (0,1), (1,-2), 'TOP'),
 
         # Data rows: columns 3 and 4 - centered horizontally and vertically
-        ('ALIGN', (2,1), (3,-2), 'CENTER'),
         ('VALIGN', (2,1), (3,-2), 'MIDDLE'),
 
         # Total row: bold font, light background, with padding and alignment
@@ -801,7 +801,7 @@ def get_months_range_string(df: pd.DataFrame) -> str:
                 month_names = [format_date(datetime(year, m, 1), "MMMM", locale='de') for m in block]
                 block_parts.append("/".join(month_names) + f" {year}")
             else:
-                month_name = datetime(year, block[0], 1).strftime("%B") + f" {year}"
+                month_name = format_date(datetime(year, block[0], 1), "MMMM", locale="de") + f" {year}"
                 block_parts.append(month_name)
 
         parts.append(", ".join(block_parts))
@@ -839,33 +839,46 @@ def build_pdf_filename(
     client_name: str,
     selected_projects: list[str],
     first_date: pd.Timestamp,
-    last_date: pd.Timestamp
+    last_date: pd.Timestamp,
+    selected_all_projects: bool = False,
+    table_for_pdf: pd.DataFrame | None = None
 ) -> str:
     """
     Generate the standard PDF filename including all months in the range.
     Format: Stundenauflistung_Client_Project_MM[_MM...]_YYYY or MM_YYYY-MM_YYYY if years differ
     """
     # Clean projects for filename
-    if not selected_projects or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects):
+    if (
+        not selected_projects
+        or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects)
+        or selected_all_projects
+    ):
         project_part = ""
+
     elif len(selected_projects) == 1:
         project_part = f"_{selected_projects[0].replace('/', '_').replace(' ', '_')}"
     else:
         project_part = "_" + "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
 
-    # Collect all months between first_date and last_date
-    months = []
-    current = first_date.replace(day=1)
-    while current <= last_date:
-        months.append((f"{current.month:02d}", f"{current.year}"))
-        if current.month == 12:
-            current = current.replace(year=current.year + 1, month=1)
-        else:
-            current = current.replace(month=current.month + 1)
-
+    # Определение месяцев
+    if table_for_pdf is not None and "start" in table_for_pdf.columns:
+        dates = pd.to_datetime(table_for_pdf["start"], dayfirst=True, errors="coerce").dropna()
+        periods = sorted(dates.dt.to_period("M").unique())
+    else:
+        # Collect all months between first_date and last_date
+        # Резервный случай — по диапазону
+        current = first_date.replace(day=1)
+        periods = []
+        while current <= last_date:
+            periods.append(pd.Period(current, freq="M"))
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1)
+            else:
+                current = current.replace(month=current.month + 1)
     # Group by year
     years = {}
-    for m, y in months:
+    for period in periods:
+        y, m = str(period.year), f"{period.month:02d}"
         years.setdefault(y, []).append(m)
 
     if len(years) == 1:
@@ -967,6 +980,7 @@ def process_reports_loop(df_date: pd.DataFrame,
         if again not in ('y', 'yes'):
             print("✅ Programm wird beendet.")
             break
+
 
 
 
