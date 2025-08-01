@@ -797,12 +797,13 @@ def get_months_range_string(df: pd.DataFrame) -> str:
 
         block_parts = []
         for block in blocks:
+            month_names = [format_date(datetime(year, m, 1), "LLLL", locale='de') for m in block]
             if len(block) > 1:
-                month_names = [format_date(datetime(year, m, 1), "MMMM", locale='de') for m in block]
+                # e.g., "Juni/Juli/August 2025"
                 block_parts.append("/".join(month_names) + f" {year}")
             else:
-                month_name = format_date(datetime(year, block[0], 1), "MMMM", locale="de") + f" {year}"
-                block_parts.append(month_name)
+                # e.g., "Juni 2025"
+                block_parts.append(f"{month_names[0]} {year}")
 
         parts.append(", ".join(block_parts))
 
