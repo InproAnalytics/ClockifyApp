@@ -15,11 +15,6 @@ is_cloud = (
     "X-Amzn-Trace-Id" in os.environ
 )
 
-try:
-    locale.setlocale(locale.LC_TIME, 'de_DE.UTF-8')
-except locale.Error:
-    st.warning("⚠️ Deutsche Sprachumgebung nicht verfügbar – Monatsnamen werden auf Englisch angezeigt.")
-
 
 # ====== Initialize authentication state ======
 
