@@ -890,7 +890,17 @@ def build_pdf_filename(
         period_parts = ["_".join(ms) + f"_{y}" for y, ms in years.items()]
         period_part = "--".join(period_parts)
 
-    return f"Stundenauflistung_{client_name}{project_part}_{period_part}.pdf"
+    parts = ["Stundenauflistung"]
+
+    if client_name:
+        parts.append(client_name.strip().replace("/", "_").replace(" ", "_"))
+
+    if project_part:
+        parts.append(project_part.lstrip("_"))
+
+    parts.append(period_part)
+
+    return "_".join(parts) + ".pdf"
 
 
 def process_reports_loop(df_date: pd.DataFrame,
@@ -963,7 +973,8 @@ def process_reports_loop(df_date: pd.DataFrame,
         first_date = start_dates.min()
         last_date = start_dates.max()
 
-        pdf_filename = build_pdf_filename(client_name, selected_projects, first_date, last_date)
+        clean_client = "" if client_name.strip().lower() == "kleinere projekte" else client_name
+        pdf_filename = build_pdf_filename(clean_client, selected_projects, first_date, last_date)
 
         # --- Generate PDF ---
         generate_report_pdf(
