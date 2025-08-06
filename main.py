@@ -849,17 +849,42 @@ def build_pdf_filename(
     Format: Stundenauflistung_Client_Project_MM[_MM...]_YYYY or MM_YYYY-MM_YYYY if years differ
     """
     # Clean projects for filename
-    if (
-        not selected_projects
-        or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects)
-        or selected_all_projects
-    ):
-        project_part = ""
+    if client_name == "Kleinere Projekte":
+        # Всегда включаем имя проекта, клиент — НЕ нужен
+        if (
+            not selected_projects
+            or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects)
+            or selected_all_projects
+        ):
+            if table_for_pdf is not None and "project_name" in table_for_pdf.columns:
+                selected_projects = sorted(
+                    table_for_pdf["project_name"].dropna().unique()
+                )
 
-    elif len(selected_projects) == 1:
-        project_part = f"_{selected_projects[0].replace('/', '_').replace(' ', '_')}"
+        if len(selected_projects) == 1:
+            project_part = selected_projects[0].replace('/', '_').replace(' ', '_')
+        else:
+            project_part = "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
+
+        parts = ["Stundenauflistung", project_part]
+
     else:
-        project_part = "_" + "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
+        if (
+            not selected_projects
+            or all(p.strip().lower() in ("alle projekte", "alle") for p in selected_projects)
+            or selected_all_projects
+        ):
+            project_part = ""
+        elif len(selected_projects) == 1:
+            project_part = selected_projects[0].replace('/', '_').replace(' ', '_')
+        else:
+            project_part = "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
+
+        parts = ["Stundenauflistung"]
+        if client_name:
+            parts.append(client_name.strip().replace("/", "_").replace(" ", "_"))
+        if project_part:
+            parts.append(project_part)
 
     # Определение месяцев
     if table_for_pdf is not None and "start" in table_for_pdf.columns:
@@ -876,6 +901,7 @@ def build_pdf_filename(
                 current = current.replace(year=current.year + 1, month=1)
             else:
                 current = current.replace(month=current.month + 1)
+    
     # Group by year
     years = {}
     for period in periods:
@@ -889,14 +915,6 @@ def build_pdf_filename(
     else:
         period_parts = ["_".join(ms) + f"_{y}" for y, ms in years.items()]
         period_part = "--".join(period_parts)
-
-    parts = ["Stundenauflistung"]
-
-    if client_name:
-        parts.append(client_name.strip().replace("/", "_").replace(" ", "_"))
-
-    if project_part:
-        parts.append(project_part.lstrip("_"))
 
     parts.append(period_part)
 

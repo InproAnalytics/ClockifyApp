@@ -316,7 +316,7 @@ if st.session_state.get("final_confirmed", False):
     last_date = start_vals.max()
 
     pdf_filename = build_pdf_filename(
-        client_name = "" if st.session_state.client_selected.strip().lower() == "kleinere projekte" else st.session_state.client_selected,
+        client_name = st.session_state.client_selected,
         selected_projects=st.session_state.selected_projects,
         first_date=first_date,
         last_date=last_date,
