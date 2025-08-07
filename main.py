@@ -546,7 +546,8 @@ def generate_report_pdf(
         ('BACKGROUND', (0,0), (-1,0), colors.white),
         ('TEXTCOLOR', (0,0), (-1,0), colors.black),
         ('FONTSIZE', (0,0), (-1,0), 10),
-        ('ALIGN', (0,0), (0,0), 'LEFT'),
+        ('ALIGN', (0,0), (1,0), 'LEFT'),
+        ('ALIGN', (2,0), (3,0), 'CENTER'),
         ('VALIGN', (0,0), (0,0), 'MIDDLE'),
 
         # In header, columns 2-4 centered horizontally
@@ -703,18 +704,17 @@ def generate_report_pdf_bytes(
         ('BACKGROUND', (0,0), (-1,0), colors.white),
         ('TEXTCOLOR', (0,0), (-1,0), colors.black),
         ('FONTSIZE', (0,0), (-1,0), 10),
-        ('ALIGN', (0,0), (0,0), 'LEFT'),
-        ('VALIGN', (0,0), (0,0), 'MIDDLE'),
-        ('ALIGN', (1,0), (3,0), 'CENTER'),
-        ('VALIGN', (1,0), (3,0), 'MIDDLE'),
+        ('ALIGN', (0,0), (1,0), 'LEFT'),
         ('ALIGN', (2,0), (3,0), 'CENTER'),
-        ('VALIGN', (2,0), (3,0), 'MIDDLE'),
+        ('VALIGN', (0,0), (-1,0), 'MIDDLE'),
+
         ('ALIGN', (0,1), (0,-2), 'LEFT'),  # Description
         ('VALIGN', (0,1), (0,-2), 'TOP'),
         ('ALIGN', (1,1), (1,-2), 'LEFT'),  # Aufgabe
         ('VALIGN', (1,1), (1,-2), 'MIDDLE'),
         ('ALIGN', (2,1), (3,-2), 'CENTER'),
         ('VALIGN', (2,1), (3,-2), 'MIDDLE'),
+        
         ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
         ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#eaeaea")),
         ('TOPPADDING', (0,-1), (-1,-1), 6),
