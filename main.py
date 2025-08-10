@@ -596,7 +596,8 @@ def generate_report_pdf_bytes(
     company_name,
     months_range,
     rows,
-    total_hours
+    total_hours,
+    manual_row=None  # 👈 добавлено
 ):
     """
     Generates the PDF and returns it as bytes (for use in Streamlit download_button).
@@ -694,7 +695,30 @@ def generate_report_pdf_bytes(
         dauer = row[3]
         table_data.append([beschreibung_paragraph, aufgabe, datum, dauer])
 
-    table_data.append(['Gesamtaufwand:', '', '', f"{total_hours:.2f}".replace('.', ',') + " h"])
+   # Стили
+    normal_left = ParagraphStyle(name='NormalLeft', fontName='Helvetica', fontSize=10, alignment=0)
+    normal_center = ParagraphStyle(name='NormalCenter', fontName='Helvetica', fontSize=10, alignment=1)
+    bold_left = ParagraphStyle(name='BoldLeft', fontName='Helvetica-Bold', fontSize=10, alignment=0)
+    bold_center = ParagraphStyle(name='BoldCenter', fontName='Helvetica-Bold', fontSize=10, alignment=1)
+
+    # Добавляем строку с автосуммой
+    sum_row = [
+        Paragraph('Gesamtaufwand:', bold_left if not manual_row else normal_left),
+        Paragraph('', normal_left),
+        Paragraph('', normal_center),
+        Paragraph(f"{total_hours:.2f}".replace('.', ',') + " h", bold_center if not manual_row else normal_center)
+    ]
+    table_data.append(sum_row)
+
+    # Если есть ручная строка — она идёт после автосуммы и становится жирной
+    if manual_row:
+        manual_row_data = [
+            Paragraph(manual_row[0], bold_left),
+            Paragraph('', bold_left),
+            Paragraph('', bold_center),
+            Paragraph(manual_row[3] + " h", bold_center)
+        ]
+        table_data.append(manual_row_data)
 
     tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
 

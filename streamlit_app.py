@@ -3,6 +3,9 @@ from datetime import date
 import calendar
 import base64
 import locale
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import seaborn as sns
 import pandas as pd
 import os
 from main import LOGO_PATH, COMPANY_NAME
@@ -261,7 +264,7 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
 if st.session_state.get("final_confirmed", False):
     st.subheader("Überprüfen und Bearbeiten der Tabelle")
 
-    # Filter the table for the current client and projects
+    # Filter table for the current client and projects
     df_selected = st.session_state.df_date[
         (st.session_state.df_date['client_name'] == st.session_state.client_selected) &
         (st.session_state.df_date['project_name'].isin(st.session_state.selected_projects))
@@ -272,8 +275,6 @@ if st.session_state.get("final_confirmed", False):
         st.stop()
 
     editable_df = df_selected[['description', 'task_name', 'start', 'duration_hours']].copy()
-
-    # Always reset the editor_table for a new client/period/project selection
     st.session_state["editor_table"] = editable_df.copy()
 
     # Data editor widget
@@ -286,61 +287,158 @@ if st.session_state.get("final_confirmed", False):
 
     required_cols = ["description", "task_name", "start", "duration_hours"]
     missing = [col for col in required_cols if col not in edited_table.columns]
-
     if missing:
         st.error(f"Spalte(n) fehlt/fehlen in der Tabelle: {', '.join(missing)}. Die PDF-Erstellung ist nicht möglich.")
         st.stop()
 
-    # Confirm changes
-    if st.button("Änderungen bestätigen"):
-        st.session_state["editable_table"] = edited_table[required_cols].copy()
-        st.session_state["pdf_bytes"] = None
-        st.success("Änderungen wurden übernommen und werden im PDF verwendet!")
+    # Show total hours WITHOUT manual row
+    total_hours = edited_table["duration_hours"].sum()
+    st.markdown(f"### Gesamtstunden: **{total_hours:.2f} Stunden**")
 
-    # Prepare table for PDF: always take current edits if exist, otherwise editor view
+    # ====== Optional manual row input ======
+    with st.expander("➕ Manuelle Zusatzzeile hinzufügen (optional)", expanded=False):
+        manual_description = st.text_input("Beschreibung der Zusatzzeile", "")
+        manual_hours = st.number_input("Stunden für Zusatzzeile", min_value=0.0, step=0.25, format="%.2f")
+
+    # Prepare table for PDF
     table_for_pdf = st.session_state.get("editable_table")
-    if table_for_pdf is None or not hasattr(table_for_pdf, "empty") or table_for_pdf.empty:
+    if table_for_pdf is None or table_for_pdf.empty:
         table_for_pdf = edited_table[required_cols].copy()
 
-    # Defensive check for empty DataFrame
-    if table_for_pdf is None or not hasattr(table_for_pdf, "empty") or table_for_pdf.empty:
+    if table_for_pdf.empty:
         st.warning("Keine gültigen Daten für PDF-Generierung.")
         st.stop()
 
-    # PDF Download section
-    st.subheader("PDF-Download")
+    # ===== Einfachste Variante: Gesamtsumme + Balkendiagramm pro Woche =====
+    df = table_for_pdf[["start", "duration_hours"]].copy()
 
-    # Prepare filename using actual dates from table — ВСЕГДА
+    # Типы
+    df["start"] = pd.to_datetime(df["start"], dayfirst=True, errors="coerce")
+    df["duration_hours"] = pd.to_numeric(
+        df["duration_hours"].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce"
+    )
+    df = df.dropna(subset=["start", "duration_hours"])
+
+    if df.empty:
+        st.warning("Keine gültigen Daten zum Anzeigen des Diagramms.")
+    else:
+        # Группировка по ISO‑неделям (понедельник — первый день)
+        iso = df["start"].dt.isocalendar()
+        weekly = (
+            pd.DataFrame({
+                "year": iso["year"].astype(int),
+                "week": iso["week"].astype(int),
+                "hours": df["duration_hours"].values
+            })
+            .groupby(["year","week"], as_index=False)["hours"].sum()
+            .sort_values(["year","week"])
+        )
+
+        if not weekly.empty:
+            labels = [f"KW {w:02d} ({y})" for y, w in zip(weekly["year"], weekly["week"])]
+            total = df["duration_hours"].sum()
+
+            st.markdown("### 📊 Stunden pro Woche")
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+            x = range(len(weekly))
+            y = weekly["hours"].values
+            bars = ax.bar(
+                x, y,
+                color="#4A90E2",      # мягкий синий
+                edgecolor=None,    # обводка
+                linewidth=0.1
+            )
+
+            # Заголовок и подписи осей
+            ax.set_title("Stunden pro Woche", fontsize=14, fontweight="bold", pad=15)
+            ax.set_xlabel("Kalenderwoche", fontsize=11)
+            ax.set_ylabel("Stunden", fontsize=11)
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+            ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+            ax.grid(axis="y", linestyle="--", alpha=0.4)
+
+            pad = (y.max() * 0.02) if len(y) and y.max() > 0 else 0.1
+            for bar, value in zip(bars, y):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,  # центр столбика
+                    value + pad,
+                    f"{value:.1f}",
+                    ha="center", va="bottom",
+                    fontsize=9,
+                    fontweight="bold",
+                    color="#333"
+                )
+            plt.tight_layout()
+            st.pyplot(fig)
+
+    # Confirm button
+    if st.button("Änderungen bestätigen"):
+        st.session_state["editable_table"] = edited_table[required_cols].copy()
+        st.session_state["pdf_bytes"] = None
+        st.session_state["manual_row"] = None
+
+        # Save manual row to session if valid
+        if manual_description and manual_hours > 0:
+            st.session_state["manual_row"] = {
+                "description": manual_description,
+                "task_name": "",
+                "start": "",
+                "duration_hours": manual_hours
+            }
+        st.success("Änderungen wurden übernommen!")
+
+    # Add manual row for PDF if exists
+    df_for_pdf = table_for_pdf.copy()
+  
+    # 1. Основные строки для отображения в PDF
+    data_rows = [
+        [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
+        for _, row in df_for_pdf.iterrows()
+    ]
+
+    # Добавляем ручную строку, если есть
+    manual_row = st.session_state.get("manual_row")
+    manual_row_data = None
+    if manual_row:
+        manual_row_data = [
+            manual_row["description"], "", "", f"{manual_row['duration_hours']:.2f}".replace('.', ',')
+        ]
+
+    # 3. Считаем total_hours ТОЛЬКО по df_for_pdf
+    total_hours = df_for_pdf["duration_hours"].sum()
+
+
+    # Calculate months and period
     start_vals = pd.to_datetime(table_for_pdf["start"], format="%d.%m.%Y", errors="coerce")
     first_date = start_vals.min()
     last_date = start_vals.max()
 
     pdf_filename = build_pdf_filename(
-        client_name = st.session_state.client_selected,
+        client_name=st.session_state.client_selected,
         selected_projects=st.session_state.selected_projects,
         first_date=first_date,
         last_date=last_date,
         selected_all_projects=st.session_state.get("selected_all_projects", False),
-        table_for_pdf=table_for_pdf
+        table_for_pdf=table_for_pdf  # не df_for_pdf
     )
 
-    # Генерация PDF, если ещё не создан
+    # PDF Generation
     if not st.session_state.get("pdf_bytes"):
         months_range = get_months_range_string(table_for_pdf)
-        total_hours = table_for_pdf['duration_hours'].sum()
-        data_rows = [
-            [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
-            for _, row in table_for_pdf.iterrows()
-        ]
+        total_hours = table_for_pdf["duration_hours"].sum()  # exclude manual!
         st.session_state["pdf_bytes"] = generate_report_pdf_bytes(
             logo_path=str(LOGO_PATH),
             company_name=COMPANY_NAME,
             months_range=months_range,
             rows=data_rows,
-            total_hours=total_hours
+            total_hours=total_hours,
+            manual_row=manual_row_data  # 👈 передаём только визуально
         )
 
-    # Кнопка загрузки
+    # Download button
     st.download_button(
         label="📥 PDF herunterladen",
         data=st.session_state["pdf_bytes"],
