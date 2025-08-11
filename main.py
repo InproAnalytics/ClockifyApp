@@ -105,88 +105,87 @@ def get_entries_by_date(start_iso: str,
                         workspace_id: str,
                         base_url: str) -> pd.DataFrame:
     """
-    Returns a DataFrame with all time entries between start_iso and end_iso, including:
-      - project_id, project_name
-      - client_id, client_name
-      - user_name, task_name, description
-
-    For reliability, fetches the full list of projects and clients from the API
-    and merges them by ID to avoid depending on fields inside the time entries.
+    Fetches all time entries for users between two dates,
+    with enriched info about users, projects and clients.
     """
+
     headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
 
-    # 0) Master lists of projects and clients
+    # Step 1: Fetch master lists of projects, clients and users
     projects = fetch_all(f"/workspaces/{workspace_id}/projects", base_url, headers)
     clients  = fetch_all(f"/workspaces/{workspace_id}/clients",  base_url, headers)
+    users = fetch_all(f"/workspaces/{workspace_id}/users", base_url, headers)
+
+    task_map = {}
+    for p in projects:
+        tasks = fetch_all(
+            f"/workspaces/{workspace_id}/projects/{p['id']}/tasks",
+            base_url,
+            headers,
+            params={"page-size": PAGE_SIZE}
+        )
+        for t in tasks:
+            task_map[str(t['id'])] = t['name']
+
     project_map = {p["id"]: p for p in projects}
     client_map  = {c["id"]: c["name"] for c in clients}
 
-    # 1) List of workspace users
-    users = fetch_all(f"/workspaces/{workspace_id}/users", base_url, headers)
-    if not users:
-        print("⚠️ Keine Benutzer im Workspace – gebe ein leeres DataFrame zurück.")
-        return pd.DataFrame()
+    all_entries = []
 
-    all_frames = []
+    # Step 2: Fetch entries for each user
     for user in users:
-        # 2) Retrieve all time entries for the user during the period
+        # Fetch all time entries for this user in the given period
         entries = fetch_all(
             f"/workspaces/{workspace_id}/user/{user['id']}/time-entries",
-            base_url,
-            headers,
-            params={"start": start_iso, "end": end_iso}
+            base_url, headers,
+            params={"start": start_iso, "end": end_iso, "hydrated": "true", "page-size": PAGE_SIZE}
         )
         if not entries:
             continue
 
         df = pd.json_normalize(entries, sep='.')
-
-        # 3) Standard columns from time entries
         df['description'] = df.get('description', pd.NA).fillna('').astype(str)
-        df['user_name']   = user.get('name', '')
+        df['user_name'] = user.get("name", "")
 
-        # 4) Map project/client using master lists
+        # Map project_id to project_name and client_id
         df['project_id'] = df.get('projectId', pd.NA).fillna('').astype(str)
-        df['project_name'] = df['project_id'].map(
-            lambda pid: project_map.get(pid, {}).get('name', '')
-        )
-        df['client_id'] = df['project_id'].map(
-            lambda pid: project_map.get(pid, {}).get('clientId', '')
-        )
-        df['client_name'] = df['client_id'].map(
-            lambda cid: client_map.get(cid, '')
-        )
+        df['project_name'] = df['project_id'].map(lambda pid: project_map.get(pid, {}).get('name', ''))
+        df['client_id'] = df['project_id'].map(lambda pid: project_map.get(pid, {}).get('clientId', ''))
+        df['client_name'] = df['client_id'].map(lambda cid: client_map.get(cid, ''))
 
-        # 5) Task name with default 'Allgemein'
+        # --- Task name ---
+        # 1) Try direct from hydrated API
         if 'task.name' in df.columns:
-            df['task_name'] = (
-                df['task.name']
-                  .fillna('Allgemein')
-                  .replace('', 'Allgemein')
-                  .astype(str)
-            )
+            df['task_name'] = df['task.name'].fillna('').astype(str).str.strip()
         else:
-            df['task_name'] = pd.Series(['Allgemein'] * len(df), index=df.index)
+            df['task_name'] = ''
 
-        # 6) Start date and duration
-        df['start'] = pd.to_datetime(df['timeInterval.start'], errors='coerce') \
-                        .dt.strftime('%d.%m.%Y')
+        # 2) Fill missing with taskId mapping
+        df['task_id'] = df.get('taskId', pd.NA).astype(str)
+        mask_missing  = df['task_name'] == ''
+        df.loc[mask_missing, 'task_name'] = df.loc[mask_missing, 'task_id'].map(task_map).fillna('').astype(str)
+
+        # 3) Default for completely empty
+        df.loc[df['task_name'].str.strip() == '', 'task_name'] = 'Allgemein'
+
+        # --- Dates & duration ---
+        df['start'] = pd.to_datetime(df['timeInterval.start'], errors='coerce').dt.strftime('%d.%m.%Y')
         df['duration_hours'] = (
-            pd.to_datetime(df['timeInterval.end'], errors='coerce')
-          - pd.to_datetime(df['timeInterval.start'], errors='coerce')
+            pd.to_datetime(df['timeInterval.end'], errors='coerce') -
+            pd.to_datetime(df['timeInterval.start'], errors='coerce')
         ).dt.total_seconds() / 3600.0
 
-        # 7) Keep only the required columns
+        # Keep only the required columns
         cols = [
             'description', 'user_name',
             'client_id', 'client_name',
             'project_id', 'project_name',
             'task_name', 'start', 'duration_hours'
         ]
-        all_frames.append(df[cols])
+        all_entries.append(df[cols])
 
-    # 8) Concatenate and return
-    if not all_frames:
+    # Step 3: Concatenate results
+    if not all_entries:
         return pd.DataFrame(columns=[
             'description', 'user_name',
             'client_id', 'client_name',
@@ -194,13 +193,14 @@ def get_entries_by_date(start_iso: str,
             'task_name', 'start', 'duration_hours'
         ])
 
-    result = pd.concat(all_frames, ignore_index=True)
-
-    # Remove rows without client_name or project_name
-    result = result.dropna(subset=["client_name", "project_name"])
+    result = pd.concat(all_entries, ignore_index=True)
+    
+    # Step 4: Remove rows without client_name or project_name
+    result = pd.concat(all_entries, ignore_index=True)
+    result = result.dropna(subset=['client_name', 'project_name'])
     result = result[
-        result["client_name"].str.strip().astype(bool) &
-        result["project_name"].str.strip().astype(bool)
+        result['client_name'].str.strip().astype(bool) &
+        result['project_name'].str.strip().astype(bool)
     ]
     return result
 
@@ -524,18 +524,28 @@ def generate_report_pdf(
         name='BodyTextLeft',
         parent=styles['BodyText'],
         alignment=TA_LEFT,
-        wordWrap='CJK',  # wrap by words
+        wordWrap='CJK',
         leading=12,
     )
-    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
 
+    cell_style_task = ParagraphStyle(
+        name='BodyTextTask',
+        parent=styles['BodyText'],
+        alignment=TA_LEFT,
+        # wordWrap='CJK', 
+        wordWrap='LTR',     # перенос по словам
+        splitLongWords=False, # длинные слова не разбивать
+        leading=12,
+    )
+
+    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]  # Header row
     for row in rows:
-        beschreibung_paragraph = Paragraph(row[0], cell_style)
-        aufgabe = row[1]
-        datum = row[2]
-        dauer = row[3]
-        table_data.append([beschreibung_paragraph, aufgabe, datum, dauer])
-    table_data.append(['Gesamtaufwand:', '', '', f"{total_hours:.2f}".replace('.', ',') + " h"])
+        table_data.append([
+            Paragraph(row[0], cell_style),       # описание
+            Paragraph(row[1], cell_style_task),  # задача
+            row[2],
+            row[3],
+        ])
 
     tbl = Table(table_data, colWidths=[55*mm, 40*mm, 40*mm, 40*mm], repeatRows=1)
 
@@ -686,14 +696,25 @@ def generate_report_pdf_bytes(
         wordWrap='CJK',
         leading=12,
     )
-    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]
 
+    cell_style_task = ParagraphStyle(
+        name='BodyTextTask',
+        parent=styles['BodyText'],
+        alignment=TA_LEFT,
+        # wordWrap='CJK', 
+        wordWrap='LTR',     # перенос по словам
+        splitLongWords=False, # длинные слова не разбивать
+        leading=12,
+    )
+
+    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]  # Header row
     for row in rows:
-        beschreibung_paragraph = Paragraph(row[0], cell_style)
-        aufgabe = row[1]
-        datum = row[2]
-        dauer = row[3]
-        table_data.append([beschreibung_paragraph, aufgabe, datum, dauer])
+        table_data.append([
+            Paragraph(row[0], cell_style),       # описание
+            Paragraph(row[1], cell_style_task),  # задача
+            row[2],
+            row[3],
+        ])
 
    # Стили
     normal_left = ParagraphStyle(name='NormalLeft', fontName='Helvetica', fontSize=10, alignment=0)
@@ -996,14 +1017,23 @@ def process_reports_loop(df_date: pd.DataFrame,
         df_proj = df_proj.sort_values(by='start', key=lambda x: pd.to_datetime(x, dayfirst=True), ascending=True)
 
         # --- Prepare table data ---
-        for col in ['description', 'task_name']:
-            df_proj[col] = (
-                df_proj[col]
-                .fillna('Allgemein')
+        # description: просто чистим, без замены
+        df_proj['description'] = (
+            df_proj['description']
+                .fillna('')
                 .astype(str)
                 .str.strip()
-                .replace(r'^$', 'Allgemein', regex=True)
-            )
+        )
+
+        # task_name: пустые -> "Allgemein"
+        df_proj['task_name'] = (
+            df_proj['task_name']
+                .fillna('')
+                .astype(str)
+                .str.strip()
+        )
+        df_proj.loc[df_proj['task_name'] == '', 'task_name'] = 'Allgemein'
+
 
         data_rows = [
             [row['description'], row['task_name'], row['start'], f"{row['duration_hours']:.2f}".replace('.', ',')]
