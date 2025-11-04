@@ -157,7 +157,13 @@ def get_entries_by_date(start_iso: str,
         )
         if not entries:
             continue
-
+        try:
+            print(f"Загружаю записи для: {user['name']} ({user['id']})")
+            entries = fetch_all(...)
+            print(f"  → Найдено записей: {len(entries)}")
+        except Exception as e:
+            print(f"  ❌ Ошибка для {user['name']}: {e}")
+        
         df = pd.json_normalize(entries, sep='.')
         df['description'] = df.get('description', pd.NA).fillna('').astype(str)
         df['user_name'] = user.get("name", "")
