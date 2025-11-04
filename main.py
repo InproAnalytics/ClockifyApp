@@ -77,27 +77,42 @@ def to_iso_format(date_str: str, is_end=False) -> str:
 def fetch_all(endpoint: str, base_url: str, headers: dict, params: dict = None):
     """
     Fetch all pages from Clockify API. Returns a flat list of JSON objects.
-    Raises RequestException on network or HTTP errors.
+    Handles HTTP errors and prints debugging information.
     """
     url = f"{base_url}{endpoint}"
     all_items = []
     page = 1
 
     while True:
-        query = params or {}
+        query = params.copy() if params else {}
         query.update({"page": page})
-        response = requests.get(url, headers=headers, params=query)
-        response.raise_for_status()
 
-        items = response.json()
-        if not items:
-            break
+        try:
+            print(f"\n📡 Запрос к API:")
+            print(f"URL: {url}")
+            print(f"Параметры: {query}")
+            print(f"Заголовки: {headers}")
 
-        all_items.extend(items)
-        page += 1
+            response = requests.get(url, headers=headers, params=query)
+
+            if response.status_code != 200:
+                print(f"❌ Ошибка запроса: {response.status_code}")
+                print(f"Ответ сервера: {response.text}")
+                break  # или return []
+
+            items = response.json()
+
+            if not items:
+                break
+
+            all_items.extend(items)
+            page += 1
+
+        except requests.exceptions.RequestException as e:
+            print(f"🚨 Ошибка сети или API: {e}")
+            break  # или return []
 
     return all_items
-
 
 def get_entries_by_date(start_iso: str,
                         end_iso: str,
