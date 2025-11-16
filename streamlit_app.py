@@ -254,8 +254,7 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
         if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
             st.session_state["selected_projects"] = projects
             st.session_state["selected_all_projects"] = True
-            # sync widget state and rerun to reflect selection
-            st.session_state["multiselect_projects"] = projects
+            # rerun to reflect selection (multiselect will be derived from state)
             st.rerun()
         else:
             # if 'select all' flag is active, trust it
