@@ -254,6 +254,13 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
         st.session_state["selected_all_projects"] = True
         st.info(f"Nur ein Projekt verfügbar: **{projects[0]}** automatisch ausgewählt.")
     else:
+        # Apply 'select all' intent BEFORE rendering the multiselect
+        if st.session_state.get("force_select_all_projects"):
+            st.session_state["multiselect_projects"] = projects
+            st.session_state["selected_projects"] = projects
+            st.session_state["selected_all_projects"] = True
+            st.session_state["force_select_all_projects"] = False
+        
         sel = st.multiselect(
             "Verfügbare Projekte:",
             options=projects,
@@ -261,9 +268,8 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
             key="multiselect_projects"
         )
         if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
-            st.session_state["selected_projects"] = projects
-            st.session_state["selected_all_projects"] = True
-            # rerun to reflect selection (multiselect will be derived from state)
+            # Set a flag and rerun so we can safely set widget state before it renders
+            st.session_state["force_select_all_projects"] = True
             st.rerun()
         else:
             # Derive the 'all selected' flag from current selection so user can change it freely
