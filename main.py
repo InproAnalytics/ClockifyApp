@@ -713,7 +713,20 @@ def generate_report_pdf_bytes(
         spaceAfter=14,
         fontName='Helvetica-bold'
     )
-    title_text = f"Stundenaufstellung {months_range}"
+    # Allow overriding the title text (for localization). If not provided,
+    # infer language from labels and choose EN/DE default accordingly.
+    if title_text is None:
+        try:
+            headers_lc = [str(h).strip().lower() for h in (header_labels or [])]
+            is_en = (
+                bool(total_label) and str(total_label).strip().lower().startswith('total')
+            ) or any(h.startswith(x) for h in headers_lc for x in ('description','task','date','duration'))
+            if is_en:
+                title_text = f"Hours statement {months_range}"
+            else:
+                title_text = f"Stundenaufstellung {months_range}"
+        except Exception:
+            title_text = f"Stundenaufstellung {months_range}"
     title_para = Paragraph(title_text, title_style)
     title_table = Table([[title_para]], colWidths=[180*mm])
     title_table.setStyle(TableStyle([
