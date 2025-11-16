@@ -68,7 +68,7 @@ st.markdown(
 if st.session_state.get("authenticated"):
     from config import API_KEY, WORKSPACE_ID, BASE_URL
     from main import to_iso_format, get_entries_by_date
-    from main import generate_report_pdf_bytes, get_months_range_string
+    from main import generate_report_pdf_bytes, get_months_range_string, get_months_range_string_en
     from main import build_pdf_filename
 
     API_KEY = st.session_state["api_key"]
@@ -116,11 +116,17 @@ st.markdown(f"👋 Willkommen, **{username.capitalize()}**!")
 # ====== Language selector ======
 if "lang" not in st.session_state:
     st.session_state["lang"] = "DE"
+
+def _on_lang_change():
+    # сбросить кэш PDF, чтобы при смене языка заголовок/хедер пересоздались
+    st.session_state["pdf_bytes"] = None
+
 st.session_state["lang"] = st.selectbox(
     "Sprache / Language",
     options=["DE", "EN"],
     index=0 if st.session_state["lang"] == "DE" else 1,
-    key="lang_select"
+    key="lang_select",
+    on_change=_on_lang_change
 )
 
 # ====== Session state initialization ======
@@ -444,17 +450,18 @@ if st.session_state.get("final_confirmed", False):
 
     # PDF Generation
     if not st.session_state.get("pdf_bytes"):
-        months_range = get_months_range_string(table_for_pdf)
-        total_hours = table_for_pdf["duration_hours"].sum()  # exclude manual!
-
-        # Labels based on selected language
+        total_hours = table_for_pdf["duration_hours"].sum()
         lang = st.session_state.get("lang", "DE")
         if lang == "EN":
+            months_range = get_months_range_string_en(table_for_pdf)
             header_labels = ["Description", "Task", "Date", "Duration"]
             total_label = "Total:"
+            title_text = f"Hours statement {months_range}"
         else:
+            months_range = get_months_range_string(table_for_pdf)
             header_labels = ["Beschreibung", "Aufgabe", "Datum", "Dauer"]
             total_label = "Gesamtaufwand:"
+            title_text = f"Stundenaufstellung {months_range}"
 
         st.session_state["pdf_bytes"] = generate_report_pdf_bytes(
             logo_path=str(LOGO_PATH),
@@ -462,9 +469,10 @@ if st.session_state.get("final_confirmed", False):
             months_range=months_range,
             rows=data_rows,
             total_hours=total_hours,
-            manual_row=manual_row_data,  # 👈 передаём только визуально
+            manual_row=manual_row_data,
             header_labels=header_labels,
-            total_label=total_label
+            total_label=total_label,
+            title_text=title_text
         )
 
     # Download button

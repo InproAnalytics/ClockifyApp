@@ -525,7 +525,9 @@ def generate_report_pdf(
         spaceAfter=14,      # space below title
         fontName='Helvetica-bold'  # bold font
     )
-    title_text = f"Stundenaufstellung {months_range}"
+    # Allow overriding the title text (for localization)
+    if title_text is None:
+        title_text = f"Stundenaufstellung {months_range}"
     title_para = Paragraph(title_text, title_style)
     # Wrap the paragraph in a table for additional alignment and styling control
     title_table = Table([[title_para]], colWidths=[180*mm])  # table width as desired
@@ -634,6 +636,7 @@ def generate_report_pdf_bytes(
     manual_row=None,  # 👈 добавлено
     header_labels=None,
     total_label=None,
+    title_text=None,
 ):
     """
     Generates the PDF and returns it as bytes (for use in Streamlit download_button).
