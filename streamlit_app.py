@@ -254,17 +254,21 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
         st.session_state["selected_all_projects"] = True
         st.info(f"Nur ein Projekt verfügbar: **{projects[0]}** automatisch ausgewählt.")
     else:
+        # Initialize multiselect state for this client if missing or client changed
+        if ("multiselect_projects" not in st.session_state) or (st.session_state.get("last_client") == client and not st.session_state.get("multiselect_projects")):
+            st.session_state["multiselect_projects"] = st.session_state["selected_projects"]
+
         # Apply 'select all' intent BEFORE rendering the multiselect
         if st.session_state.get("force_select_all_projects"):
             st.session_state["multiselect_projects"] = projects
             st.session_state["selected_projects"] = projects
             st.session_state["selected_all_projects"] = True
             st.session_state["force_select_all_projects"] = False
-        
-        sel = st.multiselect(
+
+        # Render multiselect using session_state value; do not pass default
+        st.multiselect(
             "Verfügbare Projekte:",
             options=projects,
-            default=st.session_state["selected_projects"],
             key="multiselect_projects"
         )
         if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
@@ -272,6 +276,7 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
             st.session_state["force_select_all_projects"] = True
             st.rerun()
         else:
+            sel = st.session_state.get("multiselect_projects", [])
             # Derive the 'all selected' flag from current selection so user can change it freely
             st.session_state["selected_all_projects"] = (sel == projects)
             st.session_state["selected_projects"] = sel
