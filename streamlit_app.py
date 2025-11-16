@@ -113,6 +113,16 @@ st.markdown(
 username = st.session_state.get("username", "Benutzer")
 st.markdown(f"👋 Willkommen, **{username.capitalize()}**!")
 
+# ====== Language selector ======
+if "lang" not in st.session_state:
+    st.session_state["lang"] = "DE"
+st.session_state["lang"] = st.selectbox(
+    "Sprache / Language",
+    options=["DE", "EN"],
+    index=0 if st.session_state["lang"] == "DE" else 1,
+    key="lang_select"
+)
+
 # ====== Session state initialization ======
 for key in [
     "zeitraum_confirmed", "data_loaded", "df_date", "client_selected",
@@ -429,13 +439,25 @@ if st.session_state.get("final_confirmed", False):
     if not st.session_state.get("pdf_bytes"):
         months_range = get_months_range_string(table_for_pdf)
         total_hours = table_for_pdf["duration_hours"].sum()  # exclude manual!
+
+        # Labels based on selected language
+        lang = st.session_state.get("lang", "DE")
+        if lang == "EN":
+            header_labels = ["Description", "Task", "Date", "Duration"]
+            total_label = "Total:"
+        else:
+            header_labels = ["Beschreibung", "Aufgabe", "Datum", "Dauer"]
+            total_label = "Gesamtaufwand:"
+
         st.session_state["pdf_bytes"] = generate_report_pdf_bytes(
             logo_path=str(LOGO_PATH),
             company_name=COMPANY_NAME,
             months_range=months_range,
             rows=data_rows,
             total_hours=total_hours,
-            manual_row=manual_row_data  # 👈 передаём только визуально
+            manual_row=manual_row_data,  # 👈 передаём только визуально
+            header_labels=header_labels,
+            total_label=total_label
         )
 
     # Download button

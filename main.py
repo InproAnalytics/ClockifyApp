@@ -559,7 +559,10 @@ def generate_report_pdf(
         leading=12,
     )
 
-    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]  # Header row
+    # Header labels (default DE)
+    if header_labels is None:
+        header_labels = ['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']
+    table_data = [header_labels]  # Header row
     for row in rows:
         table_data.append([
             Paragraph(row[0], cell_style),       # описание
@@ -628,7 +631,9 @@ def generate_report_pdf_bytes(
     months_range,
     rows,
     total_hours,
-    manual_row=None  # 👈 добавлено
+    manual_row=None,  # 👈 добавлено
+    header_labels=None,
+    total_label=None,
 ):
     """
     Generates the PDF and returns it as bytes (for use in Streamlit download_button).
@@ -744,8 +749,11 @@ def generate_report_pdf_bytes(
     bold_center = ParagraphStyle(name='BoldCenter', fontName='Helvetica-Bold', fontSize=10, alignment=1)
 
     # Добавляем строку с автосуммой
+    # Total row label (default DE)
+    if total_label is None:
+        total_label = 'Gesamtaufwand:'
     sum_row = [
-        Paragraph('Gesamtaufwand:', bold_left if not manual_row else normal_left),
+        Paragraph(total_label, bold_left if not manual_row else normal_left),
         Paragraph('', normal_left),
         Paragraph('', normal_center),
         Paragraph(f"{total_hours:.2f}".replace('.', ',') + " h", bold_center if not manual_row else normal_center)
