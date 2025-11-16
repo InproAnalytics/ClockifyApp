@@ -128,6 +128,9 @@ st.session_state["lang"] = st.selectbox(
     key="lang_select",
     on_change=_on_lang_change
 )
+# Track last generated language to trigger PDF regen when changed
+if "last_lang" not in st.session_state:
+    st.session_state["last_lang"] = st.session_state.get("lang", "DE")
 
 # ====== Session state initialization ======
 for key in [
@@ -263,12 +266,8 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
             # rerun to reflect selection (multiselect will be derived from state)
             st.rerun()
         else:
-            # if 'select all' flag is active, trust it
-            if st.session_state.get("selected_all_projects"):
-                sel = projects
-            else:
-                if sel != projects:
-                    st.session_state["selected_all_projects"] = False
+            # Derive the 'all selected' flag from current selection so user can change it freely
+            st.session_state["selected_all_projects"] = (sel == projects)
             st.session_state["selected_projects"] = sel
 
     if st.session_state["selected_projects"]:
@@ -449,9 +448,10 @@ if st.session_state.get("final_confirmed", False):
     )
 
     # PDF Generation
-    if not st.session_state.get("pdf_bytes"):
+    lang = st.session_state.get("lang", "DE")
+    if (not st.session_state.get("pdf_bytes")) or (st.session_state.get("last_lang") != lang):
         total_hours = table_for_pdf["duration_hours"].sum()
-        lang = st.session_state.get("lang", "DE")
+        # Build labels and title per language
         if lang == "EN":
             months_range = get_months_range_string_en(table_for_pdf)
             header_labels = ["Description", "Task", "Date", "Duration"]
@@ -474,6 +474,8 @@ if st.session_state.get("final_confirmed", False):
             total_label=total_label,
             title_text=title_text
         )
+        # Update last_lang after regeneration
+        st.session_state["last_lang"] = lang
 
     # Download button
     st.download_button(
