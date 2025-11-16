@@ -733,7 +733,10 @@ def generate_report_pdf_bytes(
         leading=12,
     )
 
-    table_data = [['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']]  # Header row
+    # Header labels (default DE)
+    if header_labels is None:
+        header_labels = ['Beschreibung', 'Aufgabe', 'Datum', 'Dauer']
+    table_data = [header_labels]  # Header row
     for row in rows:
         table_data.append([
             Paragraph(row[0], cell_style),       # описание

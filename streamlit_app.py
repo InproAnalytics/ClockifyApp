@@ -254,9 +254,16 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
         if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
             st.session_state["selected_projects"] = projects
             st.session_state["selected_all_projects"] = True
+            # sync widget state and rerun to reflect selection
+            st.session_state["multiselect_projects"] = projects
+            st.rerun()
         else:
-            if sel != projects:
-                st.session_state["selected_all_projects"] = False
+            # if 'select all' flag is active, trust it
+            if st.session_state.get("selected_all_projects"):
+                sel = projects
+            else:
+                if sel != projects:
+                    st.session_state["selected_all_projects"] = False
             st.session_state["selected_projects"] = sel
 
     if st.session_state["selected_projects"]:
@@ -268,6 +275,7 @@ if st.session_state.get("data_loaded", False) and not st.session_state.get("fina
         )
         if st.button("Auswahl bestätigen", key="btn_confirm_client"):
             st.session_state["final_confirmed"] = True
+            st.rerun()
 
 
 # ====== Data editor and PDF generation ======
