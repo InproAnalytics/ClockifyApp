@@ -875,6 +875,7 @@ def get_months_range_string(df: pd.DataFrame) -> str:
         months = sorted(set(year_to_months[year]))
         blocks = split_into_consecutive_blocks(months)
 
+    
         block_parts = []
         for block in blocks:
             month_names = [format_date(datetime(year, m, 1), "LLLL", locale='de') for m in block]
@@ -883,6 +884,63 @@ def get_months_range_string(df: pd.DataFrame) -> str:
                 block_parts.append("/".join(month_names) + f" {year}")
             else:
                 # e.g., "Juni 2025"
+                block_parts.append(f"{month_names[0]} {year}")
+
+        parts.append(", ".join(block_parts))
+
+    return ", ".join(parts)
+
+
+def get_months_range_string_en(df: pd.DataFrame) -> str:
+    """
+    English version of months range string, e.g.:
+      - 'June 2025'
+      - 'May/June 2025'
+      - 'June/July/August 2025'
+      - 'December 2024, January 2025'
+    """
+    if df.empty:
+        return ""
+
+    df = df.copy()
+    df["start_dt"] = pd.to_datetime(df["start"], format="%d.%m.%Y", errors="coerce")
+    df = df.dropna(subset=["start_dt"])
+    if df.empty:
+        return ""
+
+    df["year_month"] = df["start_dt"].dt.to_period("M")
+    unique_periods = sorted(df["year_month"].unique())
+
+    year_to_months = defaultdict(list)
+    for p in unique_periods:
+        year_to_months[p.year].append(p.month)
+
+    def split_into_consecutive_blocks(months):
+        months = sorted(set(months))
+        if not months:
+            return []
+        blocks = []
+        block = [months[0]]
+        for m in months[1:]:
+            if m - block[-1] == 1:
+                block.append(m)
+            else:
+                blocks.append(block)
+                block = [m]
+        blocks.append(block)
+        return blocks
+
+    parts = []
+    for year in sorted(year_to_months.keys()):
+        months = sorted(set(year_to_months[year]))
+        blocks = split_into_consecutive_blocks(months)
+
+        block_parts = []
+        for block in blocks:
+            month_names = [format_date(datetime(year, m, 1), "LLLL", locale='en') for m in block]
+            if len(block) > 1:
+                block_parts.append("/".join(month_names) + f" {year}")
+            else:
                 block_parts.append(f"{month_names[0]} {year}")
 
         parts.append(", ".join(block_parts))
