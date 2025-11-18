@@ -1001,12 +1001,19 @@ def build_pdf_filename(
     first_date: pd.Timestamp,
     last_date: pd.Timestamp,
     selected_all_projects: bool = False,
-    table_for_pdf: pd.DataFrame | None = None
+    table_for_pdf: pd.DataFrame | None = None,
+    lang: str = "DE",
 ) -> str:
     """
     Generate the standard PDF filename including all months in the range.
-    Format: Stundenauflistung_Client_Project_MM[_MM...]_YYYY or MM_YYYY-MM_YYYY if years differ
+    Format (DE): Stundenauflistung_Client_Project_MM[_MM...]_YYYY
+    Format (EN): Hours_statement_Client_Project_MM[_MM...]_YYYY
+    or MM_YYYY--MM_YYYY if years differ.
     """
+    # Normalize language code and choose base prefix
+    lang = (lang or "DE").upper()
+    base_prefix = "Hours_statement" if lang == "EN" else "Stundenauflistung"
+
     # Clean projects for filename
     if client_name == "Kleinere Projekte":
         # Всегда включаем имя проекта, клиент — НЕ нужен
@@ -1025,7 +1032,7 @@ def build_pdf_filename(
         else:
             project_part = "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
 
-        parts = ["Stundenauflistung", project_part]
+        parts = [base_prefix, project_part]
 
     else:
         if (
@@ -1039,7 +1046,7 @@ def build_pdf_filename(
         else:
             project_part = "_".join(p.replace('/', '_').replace(' ', '_') for p in selected_projects)
 
-        parts = ["Stundenauflistung"]
+        parts = [base_prefix]
         if client_name:
             parts.append(client_name.strip().replace("/", "_").replace(" ", "_"))
         if project_part:
