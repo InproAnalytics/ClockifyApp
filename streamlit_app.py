@@ -455,7 +455,8 @@ if st.session_state.get("final_confirmed", False):
         first_date=first_date,
         last_date=last_date,
         selected_all_projects=st.session_state.get("selected_all_projects", False),
-        table_for_pdf=table_for_pdf  # не df_for_pdf
+        table_for_pdf=table_for_pdf,  # не df_for_pdf
+        lang=st.session_state.get("lang", "DE"),
     )
 
     # PDF Generation
