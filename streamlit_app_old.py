@@ -207,65 +207,90 @@ if st.session_state.get("data_loaded", False):
 
 # ====== Select client and projects ======
 if st.session_state.get("data_loaded", False) and not st.session_state.get("final_confirmed", False):
+    st.subheader("Kunden auswählen")
 
     df_date = st.session_state["df_date"]
+    clients = sorted(df_date['client_name'].dropna().unique())
+    clients_with_empty = ["Bitte wählen..."] + clients
 
-    # --- 1. CLIENT ALWAYS EXISTS ---
-    if st.session_state.get("client_selected") and st.session_state.get("client_confirmed"):
-        client = st.session_state["client_selected"]
-    else:
-        st.subheader("Kunden auswählen")
-        clients = sorted(df_date['client_name'].dropna().unique())
-        client = st.selectbox("Kunde auswählen:", ["Bitte wählen..."] + clients)
-        if client == "Bitte wählen...":
-            st.stop()
-        st.session_state["client_selected"] = client
-        st.session_state["client_confirmed"] = True  # важно!
+    if "client_selectbox" not in st.session_state:
+        st.session_state["client_selectbox"] = "Bitte wählen..."
 
-    # === Отображаем выбранного клиента ===
-    st.markdown(f"### Kunde: **{client}**")
+    client = st.selectbox(
+        "Kunde auswählen:",
+        options=clients_with_empty,
+        key="client_selectbox"
+    )
+    if client == "Bitte wählen...":
+        st.stop()
 
-    # --- 2. PROJECTS ALWAYS EXIST ---
-    df_client = df_date[df_date["client_name"].str.lower() == client.lower()]
+    st.session_state["client_selected"] = client
+
+    df_client = df_date[
+        df_date["client_name"]
+            .str.strip()
+            .str.lower() == client.strip().lower()
+    ]
     projects = sorted(df_client['project_name'].dropna().unique())
+
+    if "selected_all_projects" not in st.session_state:
+        st.session_state["selected_all_projects"] = False
+
+    if st.session_state.get("last_client") != client:
+        st.session_state["selected_projects"] = projects if len(projects) == 1 else []
+        st.session_state["editor_table"]    = None
+        st.session_state["editable_table"]  = None
+        st.session_state["last_client"]     = client
+
+    valid = [p for p in st.session_state["selected_projects"] if p in projects]
+    st.session_state["selected_projects"] = valid
+
     if not projects:
         st.warning("Keine Projekte vorhanden.")
         st.stop()
 
-    # --- 3. MULTISELECT ---
-    st.subheader("Projekte auswählen")
-    projects = projects
-    # Обработка кнопки "Alle Projekte auswählen"
-    if st.session_state.get("force_select_all_projects"):
-        st.session_state["multiselect_projects"] = projects
-        st.session_state["force_select_all_projects"] = False
+    if len(projects) == 1:
+        st.session_state["selected_projects"] = projects
+        st.session_state["selected_all_projects"] = True
+        st.info(f"Nur ein Projekt verfügbar: **{projects[0]}** automatisch ausgewählt.")
+    else:
+        # Initialize multiselect state for this client if missing or client changed
+        if ("multiselect_projects" not in st.session_state) or (st.session_state.get("last_client") == client and not st.session_state.get("multiselect_projects")):
+            st.session_state["multiselect_projects"] = st.session_state["selected_projects"]
 
-    # Multiselect
-    st.multiselect(
-        "Verfügbare Projekte:",
-        options=projects,
-        key="multiselect_projects"
-    )
+        # Apply 'select all' intent BEFORE rendering the multiselect
+        if st.session_state.get("force_select_all_projects"):
+            st.session_state["multiselect_projects"] = projects
+            st.session_state["selected_projects"] = projects
+            st.session_state["selected_all_projects"] = True
+            st.session_state["force_select_all_projects"] = False
 
-    # Кнопка выбрать все
-    if st.button("Alle Projekte auswählen"):
-        st.session_state["force_select_all_projects"] = True
-        st.rerun()
+        # Render multiselect using session_state value; do not pass default
+        st.multiselect(
+            "Verfügbare Projekte:",
+            options=projects,
+            key="multiselect_projects"
+        )
+        if st.button("Alle Projekte auswählen", key="btn_select_all_projects"):
+            # Set a flag and rerun so we can safely set widget state before it renders
+            st.session_state["force_select_all_projects"] = True
+            st.rerun()
+        else:
+            sel = st.session_state.get("multiselect_projects", [])
+            # Derive the 'all selected' flag from current selection so user can change it freely
+            st.session_state["selected_all_projects"] = (sel == projects)
+            st.session_state["selected_projects"] = sel
 
-    # Übersicht
-    if st.session_state.get("multiselect_projects"):
+    if st.session_state["selected_projects"]:
         st.subheader("Überblick")
         st.success(
             f"Zeitraum: {start_date:%d.%m.%Y} – {end_date:%d.%m.%Y}\n\n"
             f"Kunde: {client}\n\n"
-            f"Projekte: {', '.join(st.session_state['multiselect_projects'])}"
+            f"Projekte: {', '.join(st.session_state['selected_projects'])}"
         )
-
-    # Подтверждение выбора
-    if st.button("Auswahl bestätigen"):
-        st.session_state["selected_projects"] = st.session_state["multiselect_projects"]
-        st.session_state["final_confirmed"] = True
-        st.rerun()
+        if st.button("Auswahl bestätigen", key="btn_confirm_client"):
+            st.session_state["final_confirmed"] = True
+            st.rerun()
 
 
 # ====== Data editor and PDF generation ======
@@ -331,7 +356,7 @@ if st.session_state.get("final_confirmed", False):
     if df.empty:
         st.warning("Keine gültigen Daten zum Anzeigen des Diagramms.")
     else:
-        # Группировка по ISO-неделям (понедельник — первый день)
+        # Группировка по ISO‑неделям (понедельник — первый день)
         iso = df["start"].dt.isocalendar()
         weekly = (
             pd.DataFrame({
@@ -385,7 +410,7 @@ if st.session_state.get("final_confirmed", False):
     # Confirm button
     if st.button("Änderungen bestätigen"):
         st.session_state["editable_table"] = edited_table[required_cols].copy()
-        st.session_state["pdf_bytes"] = None
+        st.session_state["pdf_bytes"] = "pending"
         st.session_state["manual_row"] = None
 
         # Save manual row to session if valid
@@ -528,8 +553,8 @@ if isinstance(st.session_state.get("pdf_bytes"), bytes):
                     "data_loaded": True,
                     "confirmed_period": True,
                     "client_confirmed": True,
-                    "final_confirmed": False,
-                    "pdf_bytes": None
+                    "final_confirmed": False,       # ← ключевое
+                    "pdf_bytes": "pending"          # ← чтобы навигация осталась
                 }
 
                 # ----- очистить только проекты -----
